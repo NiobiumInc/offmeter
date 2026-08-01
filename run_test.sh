@@ -8,22 +8,59 @@
 #
 #   ./run_test.sh --cpu     plain OpenFHE local validation
 #   ./run_test.sh --sim     FHETCH trace -> local fhetch_sim -> compare vs twin
-#   ./run_test.sh           (no flag) target the Niobium Fog (needs an API key;
-#                           preflights and prints a sign-in pointer if none)
+#   ./run_test.sh           (no flag) dispatch to the Niobium Fog: needs an API key
+#                           (preflights and prints a sign-in pointer if none), then
+#                           runs the server step under `fog submit --target=$FOG_TARGET`
+#
+# Env: FOG_TARGET  (default FOG — the real Niobium Fog; FOG_TARGET=FUNC_SIM for the HW-free simulator).
+#      RINGCHK=--no-ring-dim-check  bypasses the minimum-ring-dim security floor;
+#              unnecessary at N=2^16 (the check passes there) — opt in only for a
+#              deliberately small ring.
 #
 # Runs inside the FHE-dev container (invoke via ./run-in-container.sh).
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+run_test.sh — demand-response eligibility pipeline
+  keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
+
+Usage: ./run_test.sh [--cpu | --sim | -h]
+  (no flag)   dispatch to the Niobium Fog (default; needs an API key)
+  --cpu       plain-OpenFHE local validation on your CPU
+  --sim       record the FHETCH trace and replay it locally (fhetch_sim)
+  -h, --help  show this help
+
+Env:
+  FOG_TARGET  Fog target for the default mode (default: FOG, the real Niobium Fog;
+              set FOG_TARGET=FUNC_SIM for the hardware-free functional simulator)
+  RINGCHK     set to --no-ring-dim-check to bypass the minimum-ring-dim security floor
+              (unnecessary at N=2^16; opt in only for a deliberately small ring)
+  NREC        records to score (default: cpu=6, sim=3, fog=2)
+
+Run everything through ./run-in-container.sh. Fog access: `fog login`, or request an
+account at https://console.niobium.co/request-account.
+EOF
+}
 
 MODE="fog"; FLAG=""
 case "${1:-}" in
   --cpu) MODE="cpu"; FLAG="--cpu";;
   --sim) MODE="sim"; FLAG="--sim";;
   "" )   MODE="fog"; FLAG="";;
-  *) echo "usage: run_test.sh [--cpu|--sim]"; exit 2;;
+  -h|--help) usage; exit 0;;
+  *) usage; exit 2;;
 esac
 
-# fewer records under --sim: local fhetch_sim replay is the expensive part.
-if [ "$MODE" = "sim" ]; then NREC="${NREC:-3}"; else NREC="${NREC:-6}"; fi
+FOG_TARGET="${FOG_TARGET:-FOG}"   # required by fog submit; FOG = real Niobium Fog (FUNC_SIM = HW-free sim)
+
+# fewer records for the trace paths: each is far heavier per record than plain CPU
+# (local fhetch_sim replay under --sim; a provisioned Fog job per household under fog).
+case "$MODE" in
+  cpu) NREC="${NREC:-6}";;
+  sim) NREC="${NREC:-3}";;
+  fog) NREC="${NREC:-2}";;
+esac
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
@@ -33,7 +70,10 @@ TOL_FILE="$ROOT/data/noise_tolerance.txt"
 RUN="$ROOT/run_${MODE}"
 CLIENT="$RUN/client_home"
 SERVER="$RUN/server_home"
-RINGCHK="--no-ring-dim-check"   # N = 2^16
+# Minimum-ring-dimension check stays ON: it passes at N=2^16 and guards against an
+# insecure / hardware-incompatible ring. Opt in to bypass only for a small ring:
+#   RINGCHK=--no-ring-dim-check ./run_test.sh ...
+RINGCHK="${RINGCHK:-}"
 
 rm -rf "$RUN"; mkdir -p "$CLIENT" "$SERVER"
 for b in dr_keygen dr_encrypt dr_server dr_decrypt; do
@@ -63,14 +103,17 @@ else
 fi
 rm -f "$SERVER/sk.bin"
 
-# ---- Fog mode: preflight only (no account here) ---------------------------
+# ---- Fog mode: preflight for an API key, then dispatch (per-household, below) --
 if [ "$MODE" = "fog" ]; then
-  echo; echo "---- Fog preflight (default mode) ----"
-  "$BUILD/dr_encrypt" "$CLIENT" "$INPUTS" 0 "$SERVER/ct_x.bin"
-  "$BUILD/dr_server" "$SERVER" $RINGCHK || true
-  echo "(Provide a Fog API key via 'fog login' or FOG_API_TOKEN to dispatch to the Fog;"
-  echo " use --sim for account-free local validation.)"
-  exit 0
+  echo; echo "---- Niobium Fog (default mode) — target=$FOG_TARGET ----"
+  if [ ! -f "$HOME/.fog/credentials" ] && [ -z "${FOG_API_TOKEN:-}" ]; then
+    echo "No Fog API key found — not dispatching."
+    echo "  Have an account?  fog login          (mounts ~/.fog via run-in-container.sh)"
+    echo "  New to the Fog?   request access at https://console.niobium.co/request-account"
+    echo "  Account-free local validation:  ./run_test.sh --sim"
+    exit 0
+  fi
+  echo "Fog API key found — dispatching the per-household server step under 'fog submit'."
 fi
 
 # ---- 4. per-household pipeline ---------------------------------------------
@@ -85,9 +128,18 @@ for ((i=0; i<NREC; i++)); do
   CT_IN_BYTES=$(stat -c%s "$SERVER/ct_x.bin")
 
   ts=$(date +%s.%N)
-  # Launch the server through a tiny python wrapper so we can read the child's
-  # peak resident memory via getrusage(RUSAGE_CHILDREN) — no external `time`.
-  rss=$(python3 - "$RUN/server_$i.log" "$BUILD/dr_server" "$SERVER" $FLAG $RINGCHK <<'PY'
+  if [ "$MODE" = "fog" ]; then
+    # Dispatch to the Fog. `fog submit <program> <args…> --target=T` provisions a
+    # job, wires NBCC_FHETCH_SERVER to the assigned worker, then execs the server
+    # with no --cpu/--sim (so replay() dispatches to the Fog); the server
+    # reconstructs ct_result.bin locally — identical downstream path to --cpu/--sim.
+    # Compute runs on the worker, so local peak RSS is not meaningful here.
+    fog submit "$BUILD/dr_server" "$SERVER" $RINGCHK --target="$FOG_TARGET" \
+      > "$RUN/server_$i.log" 2>&1 || { cat "$RUN/server_$i.log"; exit 1; }
+  else
+    # Launch the server through a tiny python wrapper so we can read the child's
+    # peak resident memory via getrusage(RUSAGE_CHILDREN) — no external `time`.
+    rss=$(python3 - "$RUN/server_$i.log" "$BUILD/dr_server" "$SERVER" $FLAG $RINGCHK <<'PY'
 import sys, subprocess, resource
 log, cmd = sys.argv[1], sys.argv[2:]
 with open(log, 'wb') as f:
@@ -97,7 +149,8 @@ print(kb)
 sys.exit(rc)
 PY
 ) || { cat "$RUN/server_$i.log"; exit 1; }
-  [ "${rss:-0}" -gt "$peak_rss_kb" ] && peak_rss_kb=$rss
+    [ "${rss:-0}" -gt "$peak_rss_kb" ] && peak_rss_kb=$rss
+  fi
   te=$(date +%s.%N)
   srv_secs=$(awk -v a="$srv_secs" -v s="$ts" -v e="$te" 'BEGIN{print a+(e-s)}')
 
@@ -141,7 +194,11 @@ CMP=$?
 echo
 echo "=== deployment profile ($MODE) ==="
 printf "server wall-clock (%d recs): %.2f s  (%.2f s/record)\n" "$NREC" "$srv_secs" "$(awk -v s="$srv_secs" -v n="$NREC" 'BEGIN{print s/n}')"
-printf "peak server RSS            : %d MB\n" "$((peak_rss_kb/1024))"
+if [ "$MODE" = "fog" ]; then
+  printf "compute location          : Niobium Fog (target=%s; server RSS is remote, not measured)\n" "$FOG_TARGET"
+else
+  printf "peak server RSS            : %d MB\n" "$((peak_rss_kb/1024))"
+fi
 printf "setup keys (cc+mk+rk+pk)   : %.1f MB (client->server, once)\n" "$(awk -v b="$KEY_BYTES" 'BEGIN{print b/1048576}')"
 printf "input ciphertext / request : %.2f MB (client->server)\n" "$(awk -v b="$CT_IN_BYTES" 'BEGIN{print b/1048576}')"
 printf "output ciphertext / request: %.2f MB (server->client)\n" "$(awk -v b="$CT_OUT_BYTES" 'BEGIN{print b/1048576}')"

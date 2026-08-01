@@ -4,5 +4,28 @@
 # (and ~/.fog when present, for the Fog mode).
 set -euo pipefail
 IMAGE="${FHE_DEV_IMAGE:-ghcr.io/niobiuminc/fhe-dev:v0.13.0}"
+
+if [ "$#" -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'EOF'
+run-in-container.sh — run a command inside the FHE-dev container
+  (mounts $PWD at /work, and ~/.fog when present, so the Fog mode can see your key)
+
+Usage: ./run-in-container.sh "<command>"
+
+Common commands:
+  ./run-in-container.sh "./run_test.sh"          # dispatch to the Niobium Fog (default; needs an API key)
+  ./run-in-container.sh "./run_test.sh --cpu"    # plain-OpenFHE local validation
+  ./run-in-container.sh "./run_test.sh --sim"    # record the trace + replay locally (fhetch_sim)
+  ./run-in-container.sh "./run_test.sh --help"   # full run_test options (Fog target, env vars)
+  ./run-in-container.sh "cmake -S . -B build \
+      -DCMAKE_PREFIX_PATH='/opt/niobium-client/vendor/lib/niobium-client;/opt/niobium-client/vendor/lib/openfhe' \
+      && cmake --build build -j"                 # build the four programs
+
+Fog sign-in (persists to ~/.fog on the host):
+  docker run --rm -it -v "$HOME/.fog":/root/.fog ghcr.io/niobiuminc/fhe-dev:v0.13.0 fog login
+EOF
+  exit 0
+fi
+
 FOG=(); [ -d "$HOME/.fog" ] && FOG=(-v "$HOME/.fog:/root/.fog")
 exec docker run --rm -v "$PWD":/work -w /work "${FOG[@]}" "$IMAGE" bash -c "$*"

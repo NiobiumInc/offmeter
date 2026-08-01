@@ -109,7 +109,7 @@ key living only on the client, only ciphertext crossing between them:
   cp client_home/{cc,pk,mk,rk}.bin model/model.txt server_home/   # server gets public/eval keys + model — no secret key
   ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
   cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
-  ./build/dr_server server_home --cpu --no-ring-dim-check         # utility computes; never sees plaintext
+  ./build/dr_server server_home --cpu                             # utility computes; never sees plaintext
   cp server_home/ct_result.bin client_home/           # the wire back: still encrypted
   ./build/dr_decrypt client_home client_home/ct_result.bin        # client unlocks the answer
 '
