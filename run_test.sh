@@ -162,7 +162,45 @@ PY
   grep -h "ring-level" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. compare against the twin ------------------------------------------
+# ---- 5. application quality (LEAD: the model's own task output) ------------
+# Computed from the DECRYPTED (encrypted-run) probabilities — what a user weighing
+# FHE for this workload looks at first. This is NOT the twin comparison (that is the
+# correctness gate, printed after). The shipped data carries the reference model's
+# OWN predictions, not ground-truth labels, so there is no accuracy/AUC to report.
+echo
+echo "=== application quality (from the encrypted run) ==="
+python3 - "$RESULTS" "$ROOT/data/reference_outputs.csv" "$NREC" <<'PY'
+import sys
+res, reff, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
+probs=[]
+for line in open(res):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    probs.append(float(line.split(',')[0]))
+    if len(probs)>=nrec: break
+n=len(probs)
+pos=sum(1 for p in probs if p>=0.5)
+print(f"households scored          : {n}")
+print(f"qualify (prob >= 0.5)      : {pos} of {n}  ({100*pos/n:.1f}%)")
+print(f"eligibility probability    : mean {sum(probs)/n:.3f}  min {min(probs):.3f}  max {max(probs):.3f}")
+# One agreement line vs the reference model's OWN decisions — NOT ground truth
+# (no true labels ship). Kept distinct from the twin comparison below.
+try:
+    ref=[]
+    for line in open(reff):
+        line=line.strip()
+        if not line or line.startswith('#'): continue
+        ref.append(int(float(line.split(',')[1])))
+        if len(ref)>=n: break
+    if len(ref)>=n:
+        agree=sum(1 for p,r in zip(probs,ref) if (p>=0.5)==bool(r))
+        print(f"agreement w/ reference     : {agree} of {n} decisions  "
+              f"(reference model's own predictions, NOT ground-truth labels)")
+except Exception:
+    pass
+PY
+
+# ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
 python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" <<'PY'
 import sys
 res, twin, tolf, nrec = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -178,7 +216,7 @@ dec=probs(res, nrec); tw=probs(twin, nrec)
 tol=float(open(tolf).read().strip())
 errs=[abs(d-t) for d,t in zip(dec,tw)]
 flips=sum(1 for d,t in zip(dec,tw) if (d>0.5)!=(t>0.5))
-print("\n=== FHE vs faithful twin (encryption-noise cost) ===")
+print("\n=== encryption fidelity (FHE vs the faithful twin) ===")
 print(f"records compared     : {len(errs)}")
 print(f"max |prob FHE-twin|  : {max(errs):.3e}")
 print(f"mean|prob FHE-twin|  : {sum(errs)/len(errs):.3e}")
