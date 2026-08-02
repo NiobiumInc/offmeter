@@ -180,3 +180,18 @@ The heavy math runs on ciphertext using the CKKS homomorphic-encryption scheme
 computation, and the whole circuit is shallow (no bootstrapping). Design
 rationale, measured results, and the security/threat model are in
 `docs/`.
+
+## Clean up
+
+When you are done, remove the build tree and every per-run artifact:
+
+```bash
+make clean
+```
+
+This deletes the compiled `build/` tree, the per-mode run homes (`run_cpu`,
+`run_sim`, `run_fog`, `run_nokey`), the `client_home`/`server_home` provisioning
+dirs, and the generated FHETCH trace directories (`dr_server_workload_*`,
+`nbcc_fhetch_replay_source_*`). `clean` lists these targets **explicitly** and never
+globs `run_*`, so it cannot delete `run_test.sh`. The committed inputs under `data/`
+are left untouched, so a later run does not need to regenerate them.
