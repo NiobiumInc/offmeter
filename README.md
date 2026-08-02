@@ -36,6 +36,41 @@ encrypted probability. You unlock it at home and get a simple eligible /
 not-eligible answer. At no point does your usage, the intermediate totals, or the
 score exist in the clear anywhere but your own device.
 
+## Evaluation data & features
+
+> **Synthetic data — proof of concept only.** The dataset described here is
+> **synthetically generated** by a seeded script (`model/make_model_and_data.py`)
+> purely to demonstrate the encrypted pipeline. It is **not real, personal, or
+> proprietary data** — no actual household, smart-meter reading, or utility record is
+> used. For a real deployment, swap in the utility's model and real labeled profiles;
+> the same protocol and guarantees carry over.
+
+**Evaluation set:** 400 held-out households (`data/test_inputs.csv`), fit on a
+200-household training split. Each household is described by its private **24-hour
+electricity-usage profile** — one kWh value per hour. The pipeline outputs an
+**eligibility probability** (sigmoid), thresholded at 0.5 → *eligible / not eligible*
+for a demand-response program; the ground-truth label is drawn from an *independent*
+latent process (base rate ≈ 1/3 eligible), so the fitted model is a genuine, imperfect
+predictor.
+
+**Per-household features (encrypted and sent to the utility):**
+
+| Feature | Description | Count |
+|---|---|---|
+| `x[0] … x[23]` | Hourly electricity consumption (kWh), hour 0–23 | 24 values |
+
+Two aggregates the **circuit derives** from the same 24 values (not extra inputs):
+
+| Derived value | Definition |
+|---|---|
+| `total_daily` | Sum of all 24 hourly values (total daily kWh) |
+| `evening_peak` | Sum of hours 17–21 (evening-peak load, the load-shedding signal) |
+
+The model is a logistic regression over the 24 hourly weights plus a total-use weight
+and an evening-peak weight, favouring evening-peak-concentrated consumption (good
+load-shedding candidates). Each household encrypts its **own** profile independently
+(24 of 32,768 slots used per record).
+
 ## Is it practical?
 
 Measured on a laptop CPU, scoring one household:
