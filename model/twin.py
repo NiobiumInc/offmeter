@@ -7,6 +7,10 @@
 #                 [sigmoid_lo, sigmoid_hi] at sigmoid_degree -- the EXACT function
 #                 the encrypted circuit evaluates via OpenFHE EvalLogistic.
 #
+# The model is FITTED (see make_model_and_data.py) to independent Bernoulli labels,
+# so alongside the twin-vs-reference (polynomial) cost this script also reports the
+# fitted model's genuine quality against those true labels.
+#
 # The aggregates (total_daily, evening_peak) are computed here the same way the
 # encrypted circuit computes them: a sum over the 24 slots, and a masked sum over
 # the evening-peak slots. Both reference and twin use identical linear algebra;
@@ -47,6 +51,19 @@ def load_inputs(path):
             rows.append([float(v) for v in line.split(",")])
     return np.array(rows)
 
+def load_labels(path):
+    y = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                y.append(int(line.split(",")[1]))
+            except ValueError:      # skip the CSV header row
+                continue
+    return np.array(y)
+
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
@@ -56,17 +73,34 @@ def logit(X, m):
     return X @ m["w_hourly"] + m["w_total"] * total + m["w_peak"] * peak + m["bias"]
 
 def cheb_sigmoid_factory(lo, hi, deg):
-    # Chebyshev interpolation of the logistic on [lo,hi] -- mirrors OpenFHE
-    # EvalLogistic / EvalChebyshevFunction (interpolation at Chebyshev nodes).
     coeffs = C.chebinterpolate(lambda t: sigmoid(0.5 * (hi - lo) * t + 0.5 * (hi + lo)), deg)
     def f(x):
         t = 2.0 * (np.asarray(x) - lo) / (hi - lo) - 1.0
         return C.chebval(t, coeffs)
     return f
 
+def roc_auc(y, s):
+    order = np.argsort(s, kind="mergesort")
+    ranks = np.empty(len(s)); ranks[order] = np.arange(1, len(s) + 1)
+    _, inv, cnt = np.unique(s, return_inverse=True, return_counts=True)
+    sums = np.zeros(len(cnt)); np.add.at(sums, inv, ranks)
+    ranks = (sums / cnt)[inv]
+    n_pos = int(y.sum()); n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0: return float("nan")
+    return (ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+def prf(y, pred):
+    tp = int(((pred == 1) & (y == 1)).sum()); fp = int(((pred == 1) & (y == 0)).sum())
+    fn = int(((pred == 0) & (y == 1)).sum())
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+    return prec, rec, f1
+
 def main():
     m = load_model()
     Xte = load_inputs(os.path.join(ROOT, "data", "test_inputs.csv"))
+    yte = load_labels(os.path.join(ROOT, "data", "test_labels.csv"))
     lo, hi, deg = m["sigmoid_lo"], m["sigmoid_hi"], m["sigmoid_degree"]
 
     z = logit(Xte, m)
@@ -77,8 +111,20 @@ def main():
     lab_ref = (p_ref > 0.5).astype(int)
     lab_twin = (p_twin > 0.5).astype(int)
 
+    # ---- fitted-model quality vs the INDEPENDENT test labels ----
+    base_rate = float(yte.mean())
+    acc = float((lab_ref == yte).mean())
+    auc = float(roc_auc(yte, p_ref))
+    prec, rec, f1 = prf(yte, lab_ref)
+    print("=== fitted-model quality vs independent test labels ===")
+    print(f"records             : {len(Xte)}")
+    print(f"base rate           : {base_rate*100:.1f}% positive (true labels)")
+    print(f"accuracy            : {acc:.3f}")
+    print(f"ROC-AUC             : {auc:.3f}")
+    print(f"precision/recall/F1 : {prec:.3f} / {rec:.3f} / {f1:.3f}")
+
     # ---- Stage 3 activation-range feasibility check ----
-    print("=== Stage 3: activation-range feasibility check ===")
+    print("\n=== Stage 3: activation-range feasibility check ===")
     print(f"logit (sigmoid input) test range: [{z.min():.3f}, {z.max():.3f}]  "
           f"p0.1-p99.9=[{np.percentile(z,0.1):.3f}, {np.percentile(z,99.9):.3f}]")
     print(f"sigmoid domain [{lo:.2f}, {hi:.2f}] covers range: "
@@ -93,26 +139,23 @@ def main():
     print(f"max |prob twin-ref| : {prob_err.max():.3e}")
     print(f"mean|prob twin-ref| : {prob_err.mean():.3e}")
     print(f"decision agreement  : {(lab_twin==lab_ref).mean()*100:.2f}%  (flips={flips})")
-    print(f"eligible (reference): {lab_ref.mean()*100:.1f}%")
 
     # ---- application-level noise tolerance (Stage 7) ----
-    # A decision flips only if encryption noise moves prob across 0.5. The
-    # tightest test-set margin is the tolerance the encrypted run must clear.
     margin = np.abs(p_twin - 0.5)
     print("\n=== Stage 7: application-level noise tolerance ===")
     print(f"min decision margin |prob-0.5| over test set (twin): {margin.min():.3e}")
     print(f"  -> encryption output error below this => 0 decision flips.")
     print(f"median margin: {np.median(margin):.3e}")
 
-    # ---- write ledgers used by run_test's FHE-vs-twin comparison ----
+    # ---- write ledgers used by run_test's quality + FHE-vs-twin comparison ----
     with open(os.path.join(ROOT, "data", "reference_outputs.csv"), "w") as f:
-        f.write("# prob_reference,label_reference\n")
-        for p, l in zip(p_ref, lab_ref):
-            f.write(f"{p:.10f},{l}\n")
+        f.write("# prob_reference,decision_reference,y_true\n")
+        for p, l, yt in zip(p_ref, lab_ref, yte):
+            f.write(f"{p:.10f},{l},{int(yt)}\n")
     with open(os.path.join(ROOT, "data", "twin_outputs.csv"), "w") as f:
-        f.write("# prob_twin,label_twin\n")
-        for p, l in zip(p_twin, lab_twin):
-            f.write(f"{p:.10f},{l}\n")
+        f.write("# prob_twin,decision_twin,y_true\n")
+        for p, l, yt in zip(p_twin, lab_twin, yte):
+            f.write(f"{p:.10f},{l},{int(yt)}\n")
     with open(os.path.join(ROOT, "data", "noise_tolerance.txt"), "w") as f:
         f.write(f"{margin.min():.10e}\n")
     print("\nwrote data/reference_outputs.csv, data/twin_outputs.csv, data/noise_tolerance.txt")

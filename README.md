@@ -34,14 +34,21 @@ Measured on a laptop CPU, scoring one household:
 | Data per request | **~13 MB** up, **~7 MB** back |
 | One-time key setup (per household) | **~337 MB** |
 | Accuracy cost of the encryption | **negligible** — the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
+| Model quality (labeled synthetic test set) | **accuracy ≈ 0.77, ROC-AUC ≈ 0.80** at a ~37%-eligible base rate |
 
-**Honest caveat about the model.** The scoring model and household data shipped
-here are a **synthetic stand-in** — generated from a fixed seed, not trained on
-real households. This is a working demonstration of the *private-scoring
-pipeline*, not a validated demand-response predictor: a utility would drop in its
-own trained model (same shape) for real predictions. The encryption itself adds
-essentially no error, but the model's real-world accuracy is the utility's to
-establish.
+**Model quality, and an honest caveat.** The model here is genuinely *fitted*, and
+its quality is genuinely measured. Each synthetic household carries an
+**independent** eligibility label drawn from a fixed latent process (base rate
+**~37% eligible** — not 50/50 by construction), and the utility's logistic model is
+trained to predict that label. On a held-out 400-household test set the fitted
+model reaches **accuracy ≈ 0.77 and ROC-AUC ≈ 0.80** (precision / recall / F1
+≈ 0.76 / 0.54 / 0.63 on the eligible class) — a real, imperfect result, since the
+labels carry noise and the truth is nonlinear. The data is still **synthetic**
+(generated from a fixed seed and a known latent function), so this demonstrates the
+private-scoring *pipeline* and gives a real but synthetic-domain accuracy — **not** a
+real-world-validated demand-response predictor. A utility would drop in its own
+model of the same shape, trained on real households. The encryption itself adds
+essentially no error; the model's real-world accuracy is the utility's to establish.
 
 ## Run it
 
@@ -96,9 +103,11 @@ your own machine and check it against the plain result:
   a free bit-identical check that the replayed trace matches the plain OpenFHE run.
   It's the closest thing to a Fog run without an account.
 
-Either way you'll see the per-household probabilities, the timings and data sizes
-above, and a check that a household's secret key never reaches the server (it
-refuses to start if it finds one).
+Either way `run_test.sh` leads with the fitted model's **real quality against the
+true labels** (accuracy, ROC-AUC, precision/recall/F1, and the stated base rate),
+then the encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin),
+then the timings and data sizes above — plus a check that a household's secret key
+never reaches the server (it refuses to start if it finds one).
 
 **3 — See it as a real client/server split** — two separate processes, the secret
 key living only on the client, only ciphertext crossing between them:
@@ -138,11 +147,12 @@ Run the reference and twin (pure Python, a few seconds — no encryption):
 ./run-in-container.sh "python3 model/make_model_and_data.py && python3 model/twin.py"
 ```
 
-This prints the **approximation cost** (how far the encryption-friendly twin
-drifts from the exact model — here, ~100% decision agreement, max probability
-error ~3e-3) and writes `data/reference_outputs.csv` (cleartext) and
-`data/twin_outputs.csv` (twin). `run_test.sh` then checks the encrypted output
-against the twin, so:
+This prints the fitted model's **quality against the true labels** (accuracy,
+ROC-AUC, precision/recall/F1, base rate) and the **approximation cost** (how far the
+encryption-friendly twin drifts from the exact model — here, 100% decision
+agreement, max probability error ~5e-4), and writes `data/reference_outputs.csv`
+(cleartext) and `data/twin_outputs.csv` (twin). `run_test.sh` then checks the
+encrypted output against the twin, so:
 
 > **total error = approximation cost** (twin vs reference) **+ encryption cost**
 > (encrypted vs twin, typically ~1e-7).

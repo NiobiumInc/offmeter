@@ -162,42 +162,59 @@ PY
   grep -h "ring-level" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. application quality (LEAD: the model's own task output) ------------
-# Computed from the DECRYPTED (encrypted-run) probabilities — what a user weighing
-# FHE for this workload looks at first. This is NOT the twin comparison (that is the
-# correctness gate, printed after). The shipped data carries the reference model's
-# OWN predictions, not ground-truth labels, so there is no accuracy/AUC to report.
+# ---- 5. application quality (LEAD: real accuracy/AUC vs the TRUE labels) ----
+# The model is FITTED to an independent Bernoulli-sampled label with a documented
+# base rate, so its quality is genuinely measurable. These are the fitted model's
+# predictions vs the TRUE labels over the full labeled test set. The per-household
+# prediction is exactly the function the encrypted circuit evaluates (the faithful
+# twin); the encrypted run reproduces it to ~1e-7 — certified on the sampled
+# households by the FHE-vs-twin fidelity gate immediately below.
 echo
-echo "=== application quality (from the encrypted run) ==="
-python3 - "$RESULTS" "$ROOT/data/reference_outputs.csv" "$NREC" <<'PY'
+echo "=== application quality (fitted model vs true labels, labeled test set) ==="
+python3 - "$TWIN" "$ROOT/data/test_labels.csv" "$NREC" <<'PY'
 import sys
-res, reff, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
+twin_path, lab_path, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
 probs=[]
-for line in open(res):
+for line in open(twin_path):
     line=line.strip()
     if not line or line.startswith('#'): continue
     probs.append(float(line.split(',')[0]))
-    if len(probs)>=nrec: break
-n=len(probs)
-pos=sum(1 for p in probs if p>=0.5)
-print(f"households scored          : {n}")
-print(f"qualify (prob >= 0.5)      : {pos} of {n}  ({100*pos/n:.1f}%)")
-print(f"eligibility probability    : mean {sum(probs)/n:.3f}  min {min(probs):.3f}  max {max(probs):.3f}")
-# One agreement line vs the reference model's OWN decisions — NOT ground truth
-# (no true labels ship). Kept distinct from the twin comparison below.
-try:
-    ref=[]
-    for line in open(reff):
-        line=line.strip()
-        if not line or line.startswith('#'): continue
-        ref.append(int(float(line.split(',')[1])))
-        if len(ref)>=n: break
-    if len(ref)>=n:
-        agree=sum(1 for p,r in zip(probs,ref) if (p>=0.5)==bool(r))
-        print(f"agreement w/ reference     : {agree} of {n} decisions  "
-              f"(reference model's own predictions, NOT ground-truth labels)")
-except Exception:
-    pass
+y=[]
+for line in open(lab_path):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    try: y.append(int(line.split(',')[1]))
+    except ValueError: continue   # skip the CSV header row
+n=min(len(probs),len(y)); probs=probs[:n]; y=y[:n]
+pred=[1 if p>0.5 else 0 for p in probs]
+base=sum(y)/n
+acc=sum(1 for p,t in zip(pred,y) if p==t)/n
+# ROC-AUC via average-rank of the positive class (tie-aware Mann-Whitney).
+order=sorted(range(n), key=lambda i: probs[i])
+ranks=[0.0]*n; i=0
+while i<n:
+    j=i
+    while j+1<n and probs[order[j+1]]==probs[order[i]]: j+=1
+    avg=(i+j)/2.0+1.0
+    for k in range(i,j+1): ranks[order[k]]=avg
+    i=j+1
+npos=sum(y); nneg=n-npos
+sumpos=sum(ranks[k] for k in range(n) if y[k]==1)
+auc=(sumpos-npos*(npos+1)/2)/(npos*nneg) if npos and nneg else float('nan')
+tp=sum(1 for p,t in zip(pred,y) if p==1 and t==1)
+fp=sum(1 for p,t in zip(pred,y) if p==1 and t==0)
+fn=sum(1 for p,t in zip(pred,y) if p==0 and t==1)
+prec=tp/(tp+fp) if tp+fp else 0.0
+rec=tp/(tp+fn) if tp+fn else 0.0
+f1=2*prec*rec/(prec+rec) if prec+rec else 0.0
+print(f"labeled test households    : {n}")
+print(f"base rate (true labels)    : {100*base:.1f}% eligible")
+print(f"accuracy                   : {acc:.3f}")
+print(f"ROC-AUC                    : {auc:.3f}")
+print(f"precision / recall / F1    : {prec:.3f} / {rec:.3f} / {f1:.3f}  (positive = eligible)")
+print(f"summary                    : base rate {100*base:.0f}% eligible; accuracy {acc:.2f}, AUC {auc:.2f}")
+print(f"(predictions the encrypted run reproduces; fidelity certified below on the "
+      f"{nrec}-household encrypted sample)")
 PY
 
 # ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
