@@ -2,12 +2,27 @@
 # Build and run happen inside the FHE-dev container (see run-in-container.sh);
 # `clean` just removes the generated artifacts from this directory (all gitignored).
 
-.PHONY: help clean
+.PHONY: help clean install-skill
 
 help:
 	@echo "Targets:"
-	@echo "  make clean   remove the build tree and all per-run artifacts"
+	@echo "  make install-skill   fetch the fhe-application-design skill from GitHub into .claude/skills/ and .agents/skills/"
+	@echo "  make clean           remove the build tree and all per-run artifacts"
 	@echo "  build / run: ./run-in-container.sh \"...\"   (see ./run_test.sh --help)"
+
+# Install the fhe-application-design skill from GitHub into BOTH .claude/skills/
+# and .agents/skills/ (Claude Code and the open agent-skills layout), so this is
+# not a Claude-only setup. The skill bundles the Docker build context under
+# environment/. Both directories are gitignored.
+SKILL_REPO ?= https://github.com/NiobiumInc/niobium-skills
+SKILL_NAME ?= fhe-application-design
+install-skill:
+	@tmp=$$(mktemp -d) && git clone --depth 1 $(SKILL_REPO) "$$tmp/ns" && \
+	for d in .claude/skills .agents/skills; do \
+	  mkdir -p "$$d" && rm -rf "$$d/$(SKILL_NAME)" && \
+	  cp -R "$$tmp/ns/skills/$(SKILL_NAME)" "$$d/$(SKILL_NAME)" && \
+	  echo "installed skill to $$d/$(SKILL_NAME)"; \
+	done; rm -rf "$$tmp"
 
 # Everything a build or a run_test invocation regenerates:
 #   build/                       the CMake build tree

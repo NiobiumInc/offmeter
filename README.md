@@ -68,23 +68,37 @@ essentially no error; the model's real-world accuracy is the utility's to establ
 You need **Docker** and nothing else — no OpenFHE, no FHE libraries, no compilers
 installed locally. Everything runs inside one image.
 
-**Set up (one time).** Get the FHE-dev image, then build the app. Once the image
-is published you can pull it; until then, build it from source. The build context
-lives in the `niobium-skills` repo (not in this app repo), so clone that first; the
-build then clones `niobium-client` and compiles the instrumented OpenFHE from
-source (about an hour the first time):
+**Set up (one time):** install the skill, get the container, then build the app.
+
+**1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into
+`.claude/skills/` and `.agents/skills/` (both gitignored):
 
 ```bash
-# 1. the toolchain image
-# Once published:
+make install-skill
+```
+
+**2. Get the FHE-dev image** (`ghcr.io/niobiuminc/fhe-dev:v0.13.0`). Pull the prebuilt
+image from the GitHub Container Registry (ghcr), or build it from the skill (the first
+build clones `niobium-client` and compiles the instrumented OpenFHE, about an hour the
+first time):
+
+```bash
+# Pull the prebuilt image from ghcr (once published):
 docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0
 
-# Or build from source (needs the skill repo checked out):
-git clone git@github.com:NiobiumInc/niobium-skills.git
+# Or build it — (a) from a fresh clone of the skill repo:
+git clone https://github.com/NiobiumInc/niobium-skills
 docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
   niobium-skills/skills/fhe-application-design/environment
 
-# 2. the app's four programs (key generation, encrypt, score, decrypt)
+# Or build it — (b) from the skill installed in step 1:
+docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
+  .claude/skills/fhe-application-design/environment
+```
+
+**3. Build the app's four programs** (key generation, encrypt, score, decrypt):
+
+```bash
 ./run-in-container.sh "cmake -S . -B build \
     -DCMAKE_PREFIX_PATH='/opt/niobium-client/vendor/lib/niobium-client;/opt/niobium-client/vendor/lib/openfhe' \
     && cmake --build build -j"
