@@ -48,25 +48,27 @@ establish.
 You need **Docker** and nothing else — no OpenFHE, no FHE libraries, no compilers
 installed locally. Everything runs inside one image.
 
-**Set up (one time).** Build the FHE-dev image, then build the app. The image
-bundles Niobium's instrumented OpenFHE toolchain, so the first build clones and
-compiles it from source and takes a while (every run after is instant):
-
-<!-- TODO(publish): swap this local build for `docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0` and delete the absolute /Users/brad path once the image is published. -->
+**Set up (one time).** Get the FHE-dev image, then build the app. Once the image
+is published you can pull it; until then, build it from source. The build context
+lives in the `niobium-skills` repo (not in this app repo), so clone that first; the
+build then clones `niobium-client` and compiles the instrumented OpenFHE from
+source (about an hour the first time):
 
 ```bash
 # 1. the toolchain image
-docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 --build-arg BUILD_JOBS=6 \
-  /Users/brad/Documents/Repositories/niobium-skills/skills/fhe-application-design/environment
+# Once published:
+docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0
+
+# Or build from source (needs the skill repo checked out):
+git clone git@github.com:NiobiumInc/niobium-skills.git
+docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
+  niobium-skills/skills/fhe-application-design/environment
 
 # 2. the app's four programs (key generation, encrypt, score, decrypt)
 ./run-in-container.sh "cmake -S . -B build \
     -DCMAKE_PREFIX_PATH='/opt/niobium-client/vendor/lib/niobium-client;/opt/niobium-client/vendor/lib/openfhe' \
     && cmake --build build -j"
 ```
-
-> Interim step while this image is unpublished — once it's on the registry the
-> first command becomes `docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0`.
 
 **1 — Run it on the Niobium Fog.** The Fog is the accelerated platform these apps
 run on, and it's the default — a bare run targets it:
