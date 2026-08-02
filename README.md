@@ -2,6 +2,19 @@
 
 _Created with the Niobium FHE Application Design assistant (FHEanna) — v0.13.0._
 
+## Initial Prompt
+
+_A utility offers a rebate to households that are good candidates for easing off
+power during peak hours, and wants to score eligibility without seeing anyone's
+usage. Each household sends its encrypted 24-hour electricity-usage profile; the
+utility's model runs on the encrypted data and returns an encrypted eligibility
+score that only the household can read. Working entirely on the encrypted profile,
+the model should derive the two things it needs (total daily use, and evening-peak
+use for 5–9pm) and then score eligibility. Build a small eligibility model and
+keep the computation shallow._
+
+## Overview
+
 Your electricity meter is a diary. Its hour-by-hour readings show when you wake
 up, when you're home, when you cook, when you travel. Utilities want exactly that
 usage pattern to decide which households to invite into **demand-response**
