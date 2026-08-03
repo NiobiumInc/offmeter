@@ -30,7 +30,7 @@ install-skill:
 #   client_home/ server_home/    homes from the README's manual two-process walkthrough
 #   dr_server_workload_*/        FHETCH trace / replay directories (e.g. ..._mode_fog)
 clean:
-	rm -rf build run_cpu run_sim run_fog run_nokey \
+	rm -rf build run_cpu run_sim run_sim-full run_fog run_nokey \
 	       client_home server_home \
 	       dr_server_workload_* nbcc_fhetch_replay_source_*
 	@echo "clean: removed the build tree and per-run artifacts"

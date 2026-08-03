@@ -14,6 +14,7 @@
 #include "niobium/compiler.h"
 #include "../common.hpp"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -138,14 +139,37 @@ int main(int argc, char* argv[]) {
     niobium::compiler().tag_input("mask_slot0", pts.mask_slot0);
     niobium::compiler().tag_keys(cc);
 
+    // ---- honor --hollow -----------------------------------------------------
+    // init() has already consumed and COMPACTED --hollow out of argv, so our own
+    // arg loop above never sees it. Recover it from the compiler and enable hollow
+    // recording: the record pass then skips the expensive polynomial math (fires
+    // probes + captures the op graph only), and replay() reconstructs the real
+    // result. Every plaintext operand used inside the record bracket is tagged
+    // above, so replay has everything it needs. Under hollow the record-pass
+    // ciphertext is GARBAGE by design — but ct_result below comes from replay,
+    // so decrypt (which reads ct_result.bin) always consumes the valid value.
+    bool hollow_record = niobium::compiler().is_hollow_mode();
+    niobium::compiler().enable_hollow_mode(hollow_record);
+    if (hollow_record)
+        std::cout << "hollow recording: ON (record pass skips real math; replay reconstructs)"
+                  << std::endl;
+
     Ciphertext<DCRTPoly> ct_openfhe;
     if (!niobium::compiler().is_cache_valid()) {
+        auto t_rec0 = std::chrono::steady_clock::now();
         niobium::compiler().start();
         auto prob = run_circuit(cc, model, pts, ct_x);
         niobium::compiler().probe("prob", prob);
         niobium::compiler().stop();
-        ct_openfhe = prob;   // stash for the ring-level differential
+        auto t_rec1 = std::chrono::steady_clock::now();
+        std::cout << "record-pass wall-clock: "
+                  << std::chrono::duration<double>(t_rec1 - t_rec0).count()
+                  << " s" << (hollow_record ? "  (hollow)" : "  (real math)") << std::endl;
+        // Under hollow the record-pass ciphertext is garbage, so skip the stash
+        // (the ring-level differential below is only meaningful for real math).
+        if (!hollow_record) ct_openfhe = prob;
     }
+    niobium::compiler().enable_hollow_mode(false);
 
     if (!niobium::compiler().replay()) {
         std::cerr << "[ERROR] replay failed" << std::endl;

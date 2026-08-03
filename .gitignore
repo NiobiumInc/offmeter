@@ -4,6 +4,7 @@
 # Per-run homes provisioned by run_test.sh (keys, ciphertexts — regenerated)
 /run_cpu/
 /run_sim/
+/run_sim-full/
 /run_fog/
 /run_nokey/
 client_home/

@@ -25,10 +25,15 @@ usage() {
 run_test.sh — demand-response eligibility pipeline
   keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
 
-Usage: ./run_test.sh [--cpu | --sim | -h]
-  (no flag)   dispatch to the Niobium Fog (default; needs an API key)
+Usage: ./run_test.sh [--cpu | --sim | --sim-full | -h]
+  (no flag)   dispatch to the Niobium Fog (default; needs an API key). Records
+              hollow (fast); the Fog reconstructs the real values on replay.
   --cpu       plain-OpenFHE local validation on your CPU
-  --sim       record the FHETCH trace and replay it locally (fhetch_sim)
+  --sim       hollow record -> replay locally (fhetch_sim) -> compare to the twin.
+              A faithful local rehearsal of the (hollow) Fog run.
+  --sim-full  real-math record -> replay, plus the ring-level ciphertext-identity
+              check against OpenFHE (the thorough ground-truth run). Running --sim
+              and --sim-full and comparing them surfaces any hollow-recording divergence.
   -h, --help  show this help
 
 Env:
@@ -43,16 +48,26 @@ account at https://console.niobium.co/request-account.
 EOF
 }
 
-MODE="fog"; FLAG=""
+MODE="fog"; FLAG=""; SIMFULL=0
 case "${1:-}" in
   --cpu) MODE="cpu"; FLAG="--cpu";;
   --sim) MODE="sim"; FLAG="--sim";;
+  --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
   "" )   MODE="fog"; FLAG="";;
   -h|--help) usage; exit 0;;
   *) usage; exit 2;;
 esac
 
 FOG_TARGET="${FOG_TARGET:-FOG}"   # required by fog submit; FOG = real Niobium Fog (FUNC_SIM = HW-free sim)
+
+# Hollow record on the Fog default and --sim (fast, mirrors the Fog run); real math on
+# --sim-full (so the server's ring-level ciphertext-identity check runs) and --cpu. The
+# record pass skips the heavy polynomial math and the replay reconstructs the real result.
+HOLLOW_FLAG=""
+case "$MODE" in
+  fog) HOLLOW_FLAG="--hollow";;
+  sim) [ "$SIMFULL" = 1 ] || HOLLOW_FLAG="--hollow";;
+esac
 
 # fewer records for the trace paths: each is far heavier per record than plain CPU
 # (local fhetch_sim replay under --sim; a provisioned Fog job per household under fog).
@@ -134,12 +149,12 @@ for ((i=0; i<NREC; i++)); do
     # with no --cpu/--sim (so replay() dispatches to the Fog); the server
     # reconstructs ct_result.bin locally — identical downstream path to --cpu/--sim.
     # Compute runs on the worker, so local peak RSS is not meaningful here.
-    fog submit "$BUILD/dr_server" "$SERVER" $RINGCHK --target="$FOG_TARGET" \
+    fog submit "$BUILD/dr_server" "$SERVER" $RINGCHK $HOLLOW_FLAG --target="$FOG_TARGET" \
       > "$RUN/server_$i.log" 2>&1 || { cat "$RUN/server_$i.log"; exit 1; }
   else
     # Launch the server through a tiny python wrapper so we can read the child's
     # peak resident memory via getrusage(RUSAGE_CHILDREN) — no external `time`.
-    rss=$(python3 - "$RUN/server_$i.log" "$BUILD/dr_server" "$SERVER" $FLAG $RINGCHK <<'PY'
+    rss=$(python3 - "$RUN/server_$i.log" "$BUILD/dr_server" "$SERVER" $FLAG $RINGCHK $HOLLOW_FLAG <<'PY'
 import sys, subprocess, resource
 log, cmd = sys.argv[1], sys.argv[2:]
 with open(log, 'wb') as f:
@@ -158,8 +173,8 @@ PY
   cp "$SERVER/ct_result.bin" "$CLIENT/ct_result_$i.bin"
   "$BUILD/dr_decrypt" "$CLIENT" "$CLIENT/ct_result_$i.bin" "$RUN/prob_$i.txt" >/dev/null
   cat "$RUN/prob_$i.txt" >> "$RESULTS"
-  # surface the free ring-level identity check under --sim
-  grep -h "ring-level" "$RUN/server_$i.log" || true
+  # surface the free ring-level identity check under --sim, and the record-pass time
+  grep -h "ring-level\|record-pass\|hollow recording" "$RUN/server_$i.log" || true
 done
 
 # ---- 5. application quality (LEAD: real accuracy/AUC vs the TRUE labels) ----
