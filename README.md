@@ -105,8 +105,9 @@ installed locally. Everything runs inside one image.
 
 **Set up (one time):** install the skill, get the container, then build the app.
 
-**1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into
-`.claude/skills/` and `.agents/skills/` (both gitignored):
+**1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into the
+repository-root `.claude/skills/` and `.agents/skills/` (both gitignored). A single
+install at the repo root is shared by every app here, so this works from inside the app too:
 
 ```bash
 make install-skill
@@ -126,9 +127,9 @@ git clone https://github.com/NiobiumInc/niobium-skills
 docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
   niobium-skills/skills/fhe-application-design/environment
 
-# Or build it — (b) from the skill installed in step 1:
+# Or build it — (b) from the skill installed in step 1 (shared at the repo root):
 docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
-  .claude/skills/fhe-application-design/environment
+  ../.claude/skills/fhe-application-design/environment
 ```
 
 **3. Build the app's four programs** (key generation, encrypt, score, decrypt):

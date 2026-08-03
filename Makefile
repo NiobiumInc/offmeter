@@ -6,19 +6,24 @@
 
 help:
 	@echo "Targets:"
-	@echo "  make install-skill   fetch the fhe-application-design skill from GitHub into .claude/skills/ and .agents/skills/"
+	@echo "  make install-skill   fetch the fhe-application-design skill from GitHub into the"
+	@echo "                       repo-root .claude/skills/ and .agents/skills/ (shared by all apps)"
 	@echo "  make clean           remove the build tree and all per-run artifacts"
 	@echo "  build / run: ./run-in-container.sh \"...\"   (see ./run_test.sh --help)"
 
 # Install the fhe-application-design skill from GitHub into BOTH .claude/skills/
 # and .agents/skills/ (Claude Code and the open agent-skills layout), so this is
-# not a Claude-only setup. The skill bundles the Docker build context under
-# environment/. Both directories are gitignored.
+# not a Claude-only setup. A SINGLE install lives at the repository root and is
+# shared by every app, so running this target from inside an app still installs
+# it at the root (SKILL_ROOT resolves to the git top level, falling back to ..).
+# The skill bundles the Docker build context under environment/. Both directories
+# are gitignored.
 SKILL_REPO ?= https://github.com/NiobiumInc/niobium-skills
 SKILL_NAME ?= fhe-application-design
+SKILL_ROOT ?= $(shell git rev-parse --show-toplevel 2>/dev/null || echo ..)
 install-skill:
 	@tmp=$$(mktemp -d) && git clone --depth 1 $(SKILL_REPO) "$$tmp/ns" && \
-	for d in .claude/skills .agents/skills; do \
+	for d in "$(SKILL_ROOT)/.claude/skills" "$(SKILL_ROOT)/.agents/skills"; do \
 	  mkdir -p "$$d" && rm -rf "$$d/$(SKILL_NAME)" && \
 	  cp -R "$$tmp/ns/skills/$(SKILL_NAME)" "$$d/$(SKILL_NAME)" && \
 	  echo "installed skill to $$d/$(SKILL_NAME)"; \
