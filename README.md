@@ -172,8 +172,27 @@ then the encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin)
 then the timings and data sizes above — plus a check that a household's secret key
 never reaches the server (it refuses to start if it finds one).
 
-**3 — See it as a real client/server split** — two separate processes, the secret
-key living only on the client, only ciphertext crossing between them:
+**3 — See it as a real client/server split** — two separate OS processes talking
+only over HTTP, the secret key living only on the client, only ciphertext crossing
+between them:
+
+```bash
+./run-in-container.sh "python3 harness/demo_two_process.py"
+```
+
+This stands the household **client** and the untrusted utility/compute **provider**
+up as separate processes under `run_demo/` (a `client_home/` that holds `sk.bin`,
+a `server_home/` that never does). The client runs `dr_keygen`, ships only the
+crypto context + public/eval keys + `model.txt` at setup, then per household
+encrypts (`dr_encrypt`), uploads the ciphertext, and downloads and decrypts
+(`dr_decrypt`) the result; the provider runs `dr_server --cpu` behind
+`server_guard.sh` and logs **byte counts only**. It runs a negative test first: a
+secret key planted in the server home makes the server refuse to start (exit 13).
+
+The `run_demo/server_home/` folder is safe to place on an untrusted machine as-is
+— point the client at it with `SERVER_URL=http://host:port` to run it truly split.
+
+Prefer plain shell? The same split done by hand:
 
 ```bash
 ./run-in-container.sh '
@@ -183,14 +202,11 @@ key living only on the client, only ciphertext crossing between them:
   cp client_home/{cc,pk,mk,rk}.bin model/model.txt server_home/   # server gets public/eval keys + model — no secret key
   ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
   cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
-  ./build/dr_server server_home --cpu                             # utility computes; never sees plaintext
+  ./server_guard.sh ./build/dr_server server_home --cpu          # utility computes; guard refuses if sk present
   cp server_home/ct_result.bin client_home/           # the wire back: still encrypted
   ./build/dr_decrypt client_home client_home/ct_result.bin        # client unlocks the answer
 '
 ```
-
-The `server_home/` folder is safe to place on an untrusted machine as-is — swap
-the `cp` steps for `scp`/HTTP to a remote host to run it truly split.
 
 ## Comparing to the cleartext model
 
@@ -240,8 +256,8 @@ make clean
 ```
 
 This deletes the compiled `build/` tree, the per-mode run homes (`run_cpu`,
-`run_sim`, `run_fog`, `run_nokey`), the `client_home`/`server_home` provisioning
-dirs, and the generated FHETCH trace directories (`dr_server_workload_*`,
+`run_sim`, `run_sim-full`, `run_fog`, `run_demo`), the `client_home`/`server_home`
+provisioning dirs, and the generated FHETCH trace directories (`dr_server_workload_*`,
 `nbcc_fhetch_replay_source_*`). `clean` lists these targets **explicitly** and never
 globs `run_*`, so it cannot delete `run_test.sh`. The committed inputs under `data/`
 are left untouched, so a later run does not need to regenerate them.
