@@ -1,4 +1,8 @@
-# Private Demand-Response Eligibility
+# Offmeter
+
+_Private demand-response eligibility scoring under FHE — the utility scores your
+household on its **encrypted** 24-hour smart-meter profile and never sees the usage
+itself._
 
 _Created with the Niobium FHE Application Design assistant (FHEanna) — v0.13.0._
 
