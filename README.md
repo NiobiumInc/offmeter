@@ -155,14 +155,18 @@ your own machine and check it against the plain result:
 ```bash
 ./run-in-container.sh "./run_test.sh --cpu"    # plain OpenFHE, on your CPU
 ./run-in-container.sh "./run_test.sh --sim"    # the Fog code path, run locally
+./run-in-container.sh "./run_test.sh --sim-full" # real math + bit-exact ring-level identity check, local
 ```
 
 - **`--cpu`** runs the encrypted circuit directly with OpenFHE on your machine —
   the quickest correctness check.
-- **`--sim`** records the exact trace the Fog would execute and replays it through a
-  local simulator (`fhetch_sim`), so you exercise the *Fog code path* offline — plus
-  a free bit-identical check that the replayed trace matches the plain OpenFHE run.
-  It's the closest thing to a Fog run without an account.
+- **`--sim`** records the (hollow) trace the Fog would execute and replays it through a
+  local simulator (`fhetch_sim`), then twin-compares the result, so you exercise the
+  *Fog code path* offline. It's the closest thing to a Fog run without an account.
+- **`--sim-full`** is `--sim` but records real math instead of hollow, adding a
+  bit-exact ring-level check that the replayed trace matches the plain OpenFHE run;
+  run it alongside `--sim` to surface any hollow-recording divergence — the thorough
+  local ground-truth run, still all local with no Fog account.
 
 Either way `run_test.sh` leads with the fitted model's **real quality against the
 true labels** (accuracy, ROC-AUC, precision/recall/F1, and the stated base rate),
