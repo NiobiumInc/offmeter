@@ -151,7 +151,8 @@ for ((i=0; i<NREC; i++)); do
     # with no --cpu/--sim (so replay() dispatches to the Fog); the server
     # reconstructs ct_result.bin locally — identical downstream path to --cpu/--sim.
     # Compute runs on the worker, so local peak RSS is not meaningful here.
-    fog submit "$BUILD/dr_server" "$SERVER" $RINGCHK $HOLLOW_FLAG --target="$FOG_TARGET" \
+    # The Fog runs exactly N=2^16, so the ring-dim guard stays on here (RINGCHK, the local-testing bypass, is not forwarded).
+    fog submit "$BUILD/dr_server" "$SERVER" $HOLLOW_FLAG --target="$FOG_TARGET" \
       > "$RUN/server_$i.log" 2>&1 || { cat "$RUN/server_$i.log"; exit 1; }
   else
     # Launch the server through a tiny python wrapper so we can read the child's
