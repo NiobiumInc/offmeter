@@ -138,6 +138,21 @@ docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
 ./run-in-container.sh "make build"
 ```
 
+**4. Generate the twin ledgers the run gates on.** `model/twin.py` writes
+`data/twin_outputs.csv` (the faithful-twin predictions) and `data/noise_tolerance.txt`
+(the decision-margin tolerance) — the files `run_test.sh` checks the encrypted output
+against, in **every** mode including a Fog run. They are **gitignored** (regenerated, not
+committed), so a fresh clone must produce them once before the first run:
+
+```bash
+./run-in-container.sh "python3 model/twin.py"
+```
+
+The model and datasets (`model/model.txt`, `data/test_inputs.csv`, `data/test_labels.csv`)
+are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run — only
+`twin.py` above. (`make clean` leaves `data/` untouched, so this step is genuinely one-time
+unless you delete the ledgers or change the model.)
+
 **1 — Run it on the Niobium Fog.** The Fog is the accelerated platform these apps
 run on, and it's the default — a bare run targets it:
 

@@ -97,6 +97,19 @@ for b in dr_keygen dr_encrypt dr_server dr_decrypt; do
   [ -x "$BUILD/$b" ] || { echo "[FATAL] $BUILD/$b missing — build first"; exit 1; }
 done
 
+# ---- data prerequisites ----------------------------------------------------
+# Two generators feed this run. model/make_model_and_data.py writes the COMMITTED
+# model + datasets (model.txt, test_inputs.csv, test_labels.csv). model/twin.py writes
+# the GITIGNORED ledgers this script gates on (twin_outputs.csv, noise_tolerance.txt) —
+# regenerated, never committed — so a fresh clone must produce them once before any run.
+# Fail early with a clear pointer instead of a raw Python traceback partway through.
+for f in "$ROOT/model/model.txt" "$INPUTS" "$ROOT/data/test_labels.csv"; do
+  [ -f "$f" ] || { echo "[FATAL] $f missing — regenerate: python3 model/make_model_and_data.py"; exit 1; }
+done
+for f in "$TWIN" "$TOL_FILE"; do
+  [ -f "$f" ] || { echo "[FATAL] $f missing — generate the twin ledgers first: python3 model/twin.py"; exit 1; }
+done
+
 echo "############ demand-response run_test ($MODE, NREC=$NREC) ############"
 
 # ---- 1. keygen (client home only) -----------------------------------------
