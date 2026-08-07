@@ -2,14 +2,15 @@
 # Build and run happen inside the FHE-dev container (see run-in-container.sh);
 # `clean` just removes the generated artifacts from this directory (all gitignored).
 
-.PHONY: help clean install-skill
+.PHONY: help build clean install-skill
 
 help:
 	@echo "Targets:"
 	@echo "  make install-skill   fetch the fhe-application-design skill from GitHub into the"
 	@echo "                       repo-root .claude/skills/ and .agents/skills/ (shared by all apps)"
+	@echo "  make build           configure + build the four programs (keygen/encrypt/server/decrypt); run in-container"
 	@echo "  make clean           remove the build tree and all per-run artifacts"
-	@echo "  build / run: ./run-in-container.sh \"...\"   (see ./run_test.sh --help)"
+	@echo "  run: ./run-in-container.sh \"./run_test.sh ...\"   (see ./run_test.sh --help)"
 
 # Install the fhe-application-design skill from GitHub into BOTH .claude/skills/
 # and .agents/skills/ (Claude Code and the open agent-skills layout), so this is
@@ -28,6 +29,13 @@ install-skill:
 	  cp -R "$$tmp/ns/skills/$(SKILL_NAME)" "$$d/$(SKILL_NAME)" && \
 	  echo "installed skill to $$d/$(SKILL_NAME)"; \
 	done; rm -rf "$$tmp"
+
+# Configure + build the four programs (keygen/encrypt/server/decrypt) with CMake
+# against the prebuilt OpenFHE + niobium-client in the FHE-dev image. Run in-container:
+# ./run-in-container.sh "make build".
+build:
+	cmake -S . -B build -DCMAKE_PREFIX_PATH='/opt/niobium-client/vendor/lib/niobium-client;/opt/niobium-client/vendor/lib/openfhe'
+	cmake --build build -j$$(nproc)
 
 # Everything a build, a run_test invocation, or the two-process demo regenerates:
 #   build/                       the CMake build tree

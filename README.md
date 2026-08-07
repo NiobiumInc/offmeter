@@ -135,9 +135,7 @@ docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
 **3. Build the app's four programs** (key generation, encrypt, score, decrypt):
 
 ```bash
-./run-in-container.sh "cmake -S . -B build \
-    -DCMAKE_PREFIX_PATH='/opt/niobium-client/vendor/lib/niobium-client;/opt/niobium-client/vendor/lib/openfhe' \
-    && cmake --build build -j"
+./run-in-container.sh "make build"
 ```
 
 **1 — Run it on the Niobium Fog.** The Fog is the accelerated platform these apps
