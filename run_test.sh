@@ -90,7 +90,9 @@ SERVER="$RUN/server_home"
 #   RINGCHK=--no-ring-dim-check ./run_test.sh ...
 RINGCHK="${RINGCHK:-}"
 
-rm -rf "$RUN"; mkdir -p "$CLIENT" "$SERVER"
+# Clear the per-run home AND the FHETCH trace cache each run, so --sim-full records
+# real math (for its ring-level identity check) instead of reusing a hollow --sim trace.
+rm -rf "$RUN" "$ROOT"/dr_server_workload_* "$ROOT"/nbcc_fhetch_replay_source_*; mkdir -p "$CLIENT" "$SERVER"
 for b in dr_keygen dr_encrypt dr_server dr_decrypt; do
   [ -x "$BUILD/$b" ] || { echo "[FATAL] $BUILD/$b missing — build first"; exit 1; }
 done
