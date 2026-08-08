@@ -224,11 +224,20 @@ household holds keys of its own.
 
 #### Way 3: score your own usage
 
-Point the run at your own meter data instead of the bundled households. A file of
-672 comma-separated hourly kWh readings (28 days x 24 hours), one household per
-row:
+Point the run at your own meter data instead of the bundled households. The file
+holds 672 comma-separated hourly kWh readings (28 days x 24 hours) on one line,
+one household per line. Blank lines and `#` comments are skipped, and the
+extension is not checked, so `.csv` and `.txt` both work.
+
+`my_usage.txt`:
+
+```
+# my meter export, 28 days x 24 hourly kWh
+0.3,0.30005,0.30072,0.30667,0.33944,0.44961,0.6...
+```
 
 ```bash
+./run-in-container.sh "./run_test.sh --cpu --input my_usage.txt"
 ./run-in-container.sh "./run_test.sh --cpu --input my_usage.csv"
 ./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
 ```
