@@ -233,12 +233,6 @@ row:
 ./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
 ```
 
-Or pass the readings inline:
-
-```bash
-./run-in-container.sh "./run_test.sh --cpu --values \"$(cat my_usage.csv)\""
-```
-
 ```
 === your result ===
 your usage              : from your own input

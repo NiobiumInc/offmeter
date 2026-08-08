@@ -25,16 +25,15 @@ usage() {
 run_test.sh — demand-response eligibility pipeline
   keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
 
-Usage: ./run_test.sh [--cpu | --sim | --sim-full] [--input FILE | --values CSV] [-h]
+Usage: ./run_test.sh [--cpu | --sim | --sim-full] [--input FILE] [-h]
   Scores ONE household (HOUSEHOLD=<row>, default 0) and returns one result.
 
 Score your own usage instead of the bundled data:
   --input FILE   a .csv/.txt whose rows are 672 comma-separated hourly kWh values
-                 (28 days x 24 hours). HOUSEHOLD picks the row.
-  --values CSV   the same 672 values passed inline, as one comma-separated string.
-  Either way the faithful twin is scored for your series on the fly, so the
-  encryption-fidelity check still runs. There is no measured label for your own
-  data, so no truth column is shown.
+                 (28 days x 24 hours). HOUSEHOLD picks the row. The faithful twin
+                 is scored for your series on the fly, so the encryption-fidelity
+                 check still runs. There is no measured label for your own data,
+                 so no truth column is shown.
   (no flag)   dispatch to the Niobium Fog (default; needs an API key). Records
               hollow (fast); the Fog reconstructs the real values on replay.
   --cpu       plain-OpenFHE local validation on your CPU
@@ -60,14 +59,13 @@ account at https://console.niobium.co/request-account.
 EOF
 }
 
-MODE="fog"; FLAG=""; SIMFULL=0; USER_INPUT=""; USER_VALUES=""
+MODE="fog"; FLAG=""; SIMFULL=0; USER_INPUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --cpu) MODE="cpu"; FLAG="--cpu";;
     --sim) MODE="sim"; FLAG="--sim";;
     --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
     --input) shift; USER_INPUT="${1:?--input needs a file path}";;
-    --values) shift; USER_VALUES="${1:?--values needs comma-separated numbers}";;
     -h|--help) usage; exit 0;;
     *) usage; exit 2;;
   esac
@@ -125,15 +123,8 @@ for f in "$TWIN" "$TOL_FILE"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — generate the twin ledgers first: python3 model/twin.py"; exit 1; }
 done
 
-# ---- your own usage data (--input / --values) -------------------------------
-if [ -n "$USER_VALUES" ] && [ -n "$USER_INPUT" ]; then
-  echo "[FATAL] use --input OR --values, not both"; exit 2
-fi
-if [ -n "$USER_VALUES" ]; then
-  mkdir -p "$RUN"; INPUTS="$RUN/own_input.csv"
-  printf '%s\n' "$USER_VALUES" > "$INPUTS"
-  OWN_DATA=1; HOUSEHOLD=0
-elif [ -n "$USER_INPUT" ]; then
+# ---- your own usage data (--input) ------------------------------------------
+if [ -n "$USER_INPUT" ]; then
   [ -f "$USER_INPUT" ] || { echo "[FATAL] --input file not found: $USER_INPUT"; exit 1; }
   INPUTS="$USER_INPUT"; OWN_DATA=1
 fi
