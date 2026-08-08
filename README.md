@@ -43,6 +43,145 @@ at home and get a simple eligible / not-eligible answer. At no point does your
 usage, any intermediate quantity, or the score exist in the clear anywhere but
 your own device.
 
+## Contents
+
+- [Run it](#run-it): Docker and nothing else
+- [Evaluation data & features](#evaluation-data--features)
+- [Is it practical?](#is-it-practical)
+- [Comparing to the cleartext model](#comparing-to-the-cleartext-model)
+- [Under the hood](#under-the-hood)
+- [What's next](#whats-next)
+- [Clean up](#clean-up)
+
+## Run it
+
+You need **Docker** and nothing else: no OpenFHE, no FHE libraries, no compilers
+installed locally. Everything runs inside one image.
+
+**Set up (one time):** install the skill, get the container, then build the app.
+
+**1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into the
+repo's `.claude/skills/` and `.agents/skills/` (both gitignored):
+
+```bash
+make install-skill
+```
+
+**2. Get the FHE-dev image** (`ghcr.io/niobiuminc/fhe-dev:v0.13.0`). Pull the prebuilt
+image from the GitHub Container Registry (ghcr), or build it from the skill (the first
+build clones `niobium-client` and compiles the instrumented OpenFHE, about an hour the
+first time):
+
+```bash
+# Pull the prebuilt image from ghcr (once published):
+docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0
+
+# Or build it (a) from a fresh clone of the skill repo:
+git clone https://github.com/NiobiumInc/niobium-skills
+docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
+  niobium-skills/skills/fhe-application-design/environment
+
+# Or build it (b) from the skill installed in step 1:
+docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
+  .claude/skills/fhe-application-design/environment
+```
+
+**3. Build the app's four programs** (key generation, encrypt, score, decrypt):
+
+```bash
+./run-in-container.sh "make build"
+```
+
+**4. Generate the twin ledgers the run gates on.** `model/twin.py` writes
+`data/twin_outputs.csv` (the faithful-twin predictions) and `data/noise_tolerance.txt`
+(the decision-margin tolerance). Those are the files `run_test.sh` checks the encrypted output
+against, in **every** mode including a Fog run. They are **gitignored** (regenerated, not
+committed), so a fresh clone must produce them once before the first run:
+
+```bash
+./run-in-container.sh "python3 model/twin.py"
+```
+
+The model files and datasets (`model/model.txt`, `model/derivation.txt`,
+`data/test_inputs.csv`, `data/test_labels.csv`)
+are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run; only
+`twin.py` above. (`make clean` leaves `data/` untouched, so this step is one-time
+unless you delete the ledgers or change the model.)
+
+**1. Run it on the Niobium Fog.** The Fog is the accelerated platform this app
+runs on, and it's the default; a bare run targets it:
+
+```bash
+./run-in-container.sh "./run_test.sh"
+```
+
+- **Have an account?** Sign in to mint a key:
+  `docker run --rm -it -v "$HOME/.fog":/root/.fog ghcr.io/niobiuminc/fhe-dev:v0.13.0 fog login`
+- **New to the Fog?** Request access → **https://console.niobium.co/request-account**
+
+**2. Validate locally, no account needed.** Run the same encrypted computation on
+your own machine and check it against the plain result:
+
+```bash
+./run-in-container.sh "./run_test.sh --cpu"    # plain OpenFHE, on your CPU
+./run-in-container.sh "./run_test.sh --sim"    # the Fog code path, run locally
+./run-in-container.sh "./run_test.sh --sim-full" # real math + bit-exact ring-level identity check, local
+```
+
+- **`--cpu`** runs the encrypted circuit directly with OpenFHE on your machine,
+  the quickest correctness check.
+- **`--sim`** records the (hollow) trace the Fog would execute and replays it through a
+  local simulator (`fhetch_sim`), then twin-compares the result, so you exercise the
+  *Fog code path* offline. It's the closest thing to a Fog run without an account.
+- **`--sim-full`** is `--sim` but records real math instead of hollow, adding a
+  bit-exact ring-level check that the replayed trace matches the plain OpenFHE run;
+  run it alongside `--sim` to surface any hollow-recording divergence: the thorough
+  local ground-truth run, still all local with no Fog account.
+
+Either way `run_test.sh` leads with the model's **quality against the measured
+labels** (ROC-AUC, then precision, lift and capture at the top-20% recruitment
+depth, plus the full depth curve),
+then the encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin),
+then the timings and data sizes above, plus a check that a household's secret key
+never reaches the server (it refuses to start if it finds one).
+
+**3. See it as a real client/server split**, with two separate OS processes talking
+only over HTTP, the secret key living only on the client, only ciphertext crossing
+between them:
+
+```bash
+./run-in-container.sh "python3 harness/demo_two_process.py"
+```
+
+This stands the household **client** and the untrusted utility/compute **provider**
+up as separate processes under `run_demo/` (a `client_home/` that holds `sk.bin`,
+a `server_home/` that never does). The client runs `dr_keygen` and ships only the
+crypto context + public/eval keys at setup, while the utility's own two model
+layers are staged on the server; then per household the client
+encrypts (`dr_encrypt`), uploads the ciphertext, and downloads and decrypts
+(`dr_decrypt`) the result; the provider runs `dr_server --cpu` behind
+`server_guard.sh` and logs **byte counts only**. It runs a negative test first: a
+secret key planted in the server home makes the server refuse to start (exit 13).
+
+The `run_demo/server_home/` folder is safe to place on an untrusted machine as-is.
+Point the client at it with `SERVER_URL=http://host:port` to run it truly split.
+
+Prefer plain shell? The same split done by hand:
+
+```bash
+./run-in-container.sh '
+  set -e
+  ./build/dr_keygen client_home                       # client makes keys; secret key stays here
+  mkdir -p server_home
+  cp client_home/{cc,pk,mk,rk}.bin model/model.txt model/derivation.txt server_home/   # public/eval keys + both model layers, no secret key
+  ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
+  cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
+  ./server_guard.sh ./build/dr_server server_home --cpu          # utility computes; guard refuses if sk present
+  cp server_home/ct_result.bin client_home/           # the wire back: still encrypted
+  ./build/dr_decrypt client_home client_home/ct_result.bin        # client unlocks the answer
+'
+```
+
 ## Evaluation data & features
 
 > **Synthetic data: proof of concept only.** The dataset described here is
@@ -150,133 +289,6 @@ The households and weather are **synthetic** (fixed seed), so this demonstrates
 the private-scoring *pipeline* on a synthetic domain. The model form is the
 CalTRACK/TOWT specification used in regulated settlement, so a utility would swap
 in real AMI data and its own weights while keeping the structure.
-
-## Run it
-
-You need **Docker** and nothing else: no OpenFHE, no FHE libraries, no compilers
-installed locally. Everything runs inside one image.
-
-**Set up (one time):** install the skill, get the container, then build the app.
-
-**1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into the
-repo's `.claude/skills/` and `.agents/skills/` (both gitignored):
-
-```bash
-make install-skill
-```
-
-**2. Get the FHE-dev image** (`ghcr.io/niobiuminc/fhe-dev:v0.13.0`). Pull the prebuilt
-image from the GitHub Container Registry (ghcr), or build it from the skill (the first
-build clones `niobium-client` and compiles the instrumented OpenFHE, about an hour the
-first time):
-
-```bash
-# Pull the prebuilt image from ghcr (once published):
-docker pull ghcr.io/niobiuminc/fhe-dev:v0.13.0
-
-# Or build it (a) from a fresh clone of the skill repo:
-git clone https://github.com/NiobiumInc/niobium-skills
-docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
-  niobium-skills/skills/fhe-application-design/environment
-
-# Or build it (b) from the skill installed in step 1:
-docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
-  .claude/skills/fhe-application-design/environment
-```
-
-**3. Build the app's four programs** (key generation, encrypt, score, decrypt):
-
-```bash
-./run-in-container.sh "make build"
-```
-
-**4. Generate the twin ledgers the run gates on.** `model/twin.py` writes
-`data/twin_outputs.csv` (the faithful-twin predictions) and `data/noise_tolerance.txt`
-(the decision-margin tolerance). Those are the files `run_test.sh` checks the encrypted output
-against, in **every** mode including a Fog run. They are **gitignored** (regenerated, not
-committed), so a fresh clone must produce them once before the first run:
-
-```bash
-./run-in-container.sh "python3 model/twin.py"
-```
-
-The model files and datasets (`model/model.txt`, `model/derivation.txt`,
-`data/test_inputs.csv`, `data/test_labels.csv`)
-are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run; only
-`twin.py` above. (`make clean` leaves `data/` untouched, so this step is one-time
-unless you delete the ledgers or change the model.)
-
-**1. Run it on the Niobium Fog.** The Fog is the accelerated platform this app
-runs on, and it's the default; a bare run targets it:
-
-```bash
-./run-in-container.sh "./run_test.sh"
-```
-
-- **Have an account?** Sign in to mint a key:
-  `docker run --rm -it -v "$HOME/.fog":/root/.fog ghcr.io/niobiuminc/fhe-dev:v0.13.0 fog login`
-- **New to the Fog?** Request access → **https://console.niobium.co/request-account**
-
-**2. Validate locally, no account needed.** Run the same encrypted computation on
-your own machine and check it against the plain result:
-
-```bash
-./run-in-container.sh "./run_test.sh --cpu"    # plain OpenFHE, on your CPU
-./run-in-container.sh "./run_test.sh --sim"    # the Fog code path, run locally
-./run-in-container.sh "./run_test.sh --sim-full" # real math + bit-exact ring-level identity check, local
-```
-
-- **`--cpu`** runs the encrypted circuit directly with OpenFHE on your machine,
-  the quickest correctness check.
-- **`--sim`** records the (hollow) trace the Fog would execute and replays it through a
-  local simulator (`fhetch_sim`), then twin-compares the result, so you exercise the
-  *Fog code path* offline. It's the closest thing to a Fog run without an account.
-- **`--sim-full`** is `--sim` but records real math instead of hollow, adding a
-  bit-exact ring-level check that the replayed trace matches the plain OpenFHE run;
-  run it alongside `--sim` to surface any hollow-recording divergence: the thorough
-  local ground-truth run, still all local with no Fog account.
-
-Either way `run_test.sh` leads with the fitted model's **real quality against the
-true labels** (accuracy, ROC-AUC, precision/recall/F1, and the stated base rate),
-then the encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin),
-then the timings and data sizes above, plus a check that a household's secret key
-never reaches the server (it refuses to start if it finds one).
-
-**3. See it as a real client/server split**, with two separate OS processes talking
-only over HTTP, the secret key living only on the client, only ciphertext crossing
-between them:
-
-```bash
-./run-in-container.sh "python3 harness/demo_two_process.py"
-```
-
-This stands the household **client** and the untrusted utility/compute **provider**
-up as separate processes under `run_demo/` (a `client_home/` that holds `sk.bin`,
-a `server_home/` that never does). The client runs `dr_keygen`, ships only the
-crypto context + public/eval keys + `model.txt` at setup, then per household
-encrypts (`dr_encrypt`), uploads the ciphertext, and downloads and decrypts
-(`dr_decrypt`) the result; the provider runs `dr_server --cpu` behind
-`server_guard.sh` and logs **byte counts only**. It runs a negative test first: a
-secret key planted in the server home makes the server refuse to start (exit 13).
-
-The `run_demo/server_home/` folder is safe to place on an untrusted machine as-is.
-Point the client at it with `SERVER_URL=http://host:port` to run it truly split.
-
-Prefer plain shell? The same split done by hand:
-
-```bash
-./run-in-container.sh '
-  set -e
-  ./build/dr_keygen client_home                       # client makes keys; secret key stays here
-  mkdir -p server_home
-  cp client_home/{cc,pk,mk,rk}.bin model/model.txt model/derivation.txt server_home/   # public/eval keys + both model layers, no secret key
-  ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
-  cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
-  ./server_guard.sh ./build/dr_server server_home --cpu          # utility computes; guard refuses if sk present
-  cp server_home/ct_result.bin client_home/           # the wire back: still encrypted
-  ./build/dr_decrypt client_home client_home/ct_result.bin        # client unlocks the answer
-'
-```
 
 ## Comparing to the cleartext model
 
