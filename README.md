@@ -150,10 +150,10 @@ your own machine and check it against the plain result:
   run it alongside `--sim` to surface any hollow-recording divergence: the thorough
   local ground-truth run, still all local with no Fog account.
 
-### Two ways to run it
+### Three ways to run it
 
-Both use the four execution targets above. They differ in how many households are
-scored.
+All three use the four execution targets above. They differ in whose data is
+scored, and how much of it.
 
 #### Way 1: score one household (default)
 
@@ -219,7 +219,7 @@ households: `model/twin.py` scores them in the clear, which is why they appear e
 on a single-household run. `NREC` adds encrypted samples to the fidelity gate.
 
 The sweep reuses one key set across its rows to stay fast, and labels itself as
-doing so in the output. Ways 1 and 1b are the shape a deployment has, where each
+doing so in the output. Ways 1, 1b and 3 are the shape a deployment has, where a
 household holds keys of its own.
 
 #### Way 3: score your own usage
