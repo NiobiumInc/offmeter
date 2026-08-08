@@ -197,16 +197,39 @@ PY
   grep -h "ring-level\|record-pass\|hollow recording" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. application quality (LEAD: the decision a household actually receives) --
-# The labels are MEASURED (10-in-10 CBL minus actual event load, thresholded in kW).
-# The deployed protocol scores ONE household per request and that household
-# thresholds its own probability at 0.5, so 0.5 is the operating point reported
-# first. The depth table below shows the same score under a ranked deployment.
+# ---- 5. what each household learned, then the model's offline quality --------
+# The protocol scores ONE household per request and returns an answer only that
+# household can read. So the run leads with the per-household result, and the
+# population figures below are offline model validation on a labeled set.
 echo
-echo "=== application quality (confidential model vs measured labels, full test set) ==="
-python3 - "$TWIN" "$ROOT/data/test_labels.csv" "$NREC" <<'PY'
+echo "=== what each household learned (this run) ==="
+python3 - "$RESULTS" "$ROOT/data/test_labels.csv" <<'PY'
 import sys
-twin_path, lab_path, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
+res, lab = sys.argv[1], sys.argv[2]
+probs=[]
+for line in open(res):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    probs.append(float(line.split(',')[0]))
+truth=[]
+for line in open(lab):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    try: truth.append(int(line.split(',')[1]))
+    except ValueError: continue
+print(f"{'household':>10} {'probability':>12} {'its answer':>15} {'measured truth':>16}")
+for i, p in enumerate(probs):
+    ans = "ELIGIBLE" if p > 0.5 else "not eligible"
+    t = "eligible" if truth[i] else "not eligible"
+    print(f"{i:>10} {p:>12.4f} {ans:>15} {t:>16}")
+print("each decrypted with that household's own secret key; the server saw none of it")
+PY
+
+echo
+echo "=== model quality (offline validation on the labeled development set) ==="
+python3 - "$TWIN" "$ROOT/data/test_labels.csv" <<'PY'
+import sys
+twin_path, lab_path = sys.argv[1], sys.argv[2]
 probs=[]
 for line in open(twin_path):
     line=line.strip()
@@ -217,7 +240,7 @@ for line in open(lab_path):
     line=line.strip()
     if not line or line.startswith('#'): continue
     try: y.append(int(line.split(',')[1]))
-    except ValueError: continue   # skip the CSV header row
+    except ValueError: continue
 n=min(len(probs),len(y)); probs=probs[:n]; y=y[:n]
 npos=sum(y); base=npos/n
 order=sorted(range(n), key=lambda i: probs[i])
@@ -231,27 +254,15 @@ while i<n:
 nneg=n-npos
 sumpos=sum(ranks[k] for k in range(n) if y[k]==1)
 auc=(sumpos-npos*(npos+1)/2)/(npos*nneg) if npos and nneg else float('nan')
-print(f"records                    : {n}  (labeled development set, scored in the clear)")
-print(f"base rate (measured labels): {100*base:.1f}% eligible ({npos} of {n})")
-print(f"ROC-AUC                    : {auc:.3f}   (ranking quality, threshold-free)")
 sel=[i for i in range(n) if probs[i]>0.5]
 tp=sum(y[i] for i in sel); k=len(sel)
 prec=tp/k if k else float('nan'); rec=tp/npos if npos else float('nan')
-print(f"--- the answer a household receives: its own score, thresholded at 0.5 ---")
-print(f"told eligible              : {k} of {n} households ({100*k/n:.1f}%)")
-print(f"precision                  : {prec:.3f}   told eligible and truly eligible")
-print(f"                             {base:.3f} for a household picked at random ({prec/base:.2f}x)")
-print(f"recall                     : {rec:.3f}   of truly eligible households are told so")
-rank=sorted(range(n), key=lambda i: -probs[i])
-print("--- the same score at fixed selection depths (for a ranked deployment) ---")
-print(f"{'depth':>6} {'selected':>9} {'precision':>10} {'capture':>9} {'lift':>6}")
-for d in (1,2,3,4,5):
-    kk=max(1,int(round(n*d/10))); cap=sum(y[i] for i in rank[:kk])
-    print(f"{d*10:>5}% {kk:>9} {cap/kk:>10.3f} {100*cap/npos:>8.1f}% {(cap/kk)/base:>6.2f}")
-print(f"summary                    : AUC {auc:.2f}; a household told eligible truly is "
-      f"{100*prec:.0f}% of the time, vs {100*base:.0f}% at random")
-print(f"(predictions the encrypted run reproduces; fidelity certified below on the "
-      f"{nrec}-household encrypted sample)")
+print(f"households in the set      : {n} (scored in the clear, labels known)")
+print(f"base rate                  : {100*base:.1f}% are eligible")
+print(f"ROC-AUC                    : {auc:.3f}")
+print(f"when it answers ELIGIBLE   : right {100*prec:.1f}% of the time "
+      f"({100*base:.1f}% at random, so {prec/base:.2f}x better)")
+print(f"of truly eligible households: {100*rec:.1f}% are told so")
 PY
 
 # ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
