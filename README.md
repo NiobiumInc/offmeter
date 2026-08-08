@@ -104,23 +104,47 @@ Measured on a laptop CPU, scoring one household:
 | Data per request | **13 MB** up, **7 MB** back |
 | One-time key setup (per household) | **607 MB** |
 | Accuracy cost of the encryption | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
-| Model quality (measured labels, synthetic households) | **accuracy 0.775, ROC-AUC 0.839** at a 26.8%-eligible base rate |
+| Model quality (measured labels, synthetic households) | **ROC-AUC 0.839**; recruiting the top 20% hits **60% eligible** vs 26.8% at random |
 
-**Model quality.** The model's quality is measured against labels produced by the
-settlement arithmetic described above. On the held-out
-400 households it reaches **accuracy 0.775 and ROC-AUC 0.839** (precision /
-recall / F1 = 0.568 / 0.664 / 0.612 on the eligible class).
+**Model quality, and the operating point it is quoted at.** A utility does not
+apply a probability cut to a targeting score. It ranks households and recruits
+down the list until it hits a budget or a capacity target, so model quality is
+reported at a **recruitment depth**. Every figure below is quoted at one depth,
+the **top 20% by score**.
 
-Those figures are read against the **achievable ceiling**. Event response is
-driven by a household's willingness to curtail, which never appears in metered
-load, so meter data caps how well any model can predict it. A model given perfect
-knowledge of every *physical* household parameter, while still blind to
-willingness, scores **accuracy 0.772, AUC 0.839**. The six derived quantities
-therefore extract essentially **everything extractable** from the baseline period,
-and the remaining gap is behavioural.
+Why that depth:
 
-In targeting terms, the top 20% of ranked households contain **44.9%** of all
-eligibles, and the top 30% contain **63.6%**.
+- **Decile ranking is the reporting convention** for propensity and targeting
+  models, and *top-decile lift* is the standard published benchmark. Reported
+  values in customer-targeting work generally fall between **2.0× and 3.5×**, with
+  ~2.0× a common average ([decile
+  analysis](https://www.kdnuggets.com/2021/07/lost-art-decile-analysis.html),
+  [technique comparison](https://arxiv.org/pdf/1607.07792)).
+- **Precision holds flat through the first two deciles here and falls from the
+  third** (0.600, 0.600, 0.567 …). Top 20% is therefore the deepest depth that
+  still recruits at the full hit rate: it captures twice the eligible households
+  of a top-10% cut at identical precision.
+
+At that operating point, on the 400 held-out households:
+
+| | Model | Recruiting at random |
+|---|---|---|
+| Households recruited | 80 of 400 | 80 of 400 |
+| Precision (hit rate) | **0.600** | 0.268 |
+| Lift over random | **2.24×** | 1.00× |
+| Eligibles captured | **44.9%** (48 of 107) | 20% |
+
+Ranking quality independent of any depth is **ROC-AUC 0.839**.
+
+`run_test` prints the full recruitment-depth curve so a program with a different
+budget can read its own operating point off the table.
+
+**Read against the achievable ceiling.** Event response is driven by a household's
+willingness to curtail, which never appears in metered load, so meter data caps how
+well any model can predict it. A model given perfect knowledge of every *physical*
+household parameter, while still blind to willingness, also scores **AUC 0.839**.
+The six derived quantities therefore extract essentially **everything extractable**
+from the baseline period, and the remaining gap is behavioural.
 
 The households and weather are **synthetic** (fixed seed), so this demonstrates
 the private-scoring *pipeline* on a synthetic domain. The model form is the

@@ -125,16 +125,21 @@ def prf(y, pred):
     return prec, rec, (2 * prec * rec / (prec + rec) if prec + rec else 0.0)
 
 
-def decile_lift(y, s):
-    """Targeting deciles: utilities rank customers and work down the list."""
+# Operating point: utilities rank households and recruit down the list to a budget
+# or capacity target, so quality is quoted at a recruitment depth rather than at a
+# probability cut. Top 20% is the deepest depth at which precision has not yet
+# degraded on this data (see README).
+TOP_FRACTION = 0.20
+
+
+def at_depth(y, s, frac):
+    """(recruited, precision, capture, lift, n_captured) at a recruitment depth."""
     order = np.argsort(-s)
     n, npos = len(y), int(y.sum())
-    out = []
-    for d in (1, 2, 3):
-        k = int(round(n * d / 10))
-        cap = int(y[order[:k]].sum())
-        out.append((d * 10, k, cap, 100.0 * cap / npos if npos else float("nan")))
-    return out
+    k = max(1, int(round(n * frac)))
+    cap = int(y[order[:k]].sum())
+    prec, base = cap / k, npos / n
+    return k, prec, (cap / npos if npos else float("nan")), prec / base, cap
 
 
 def main():
@@ -160,16 +165,22 @@ def main():
     print(f"derived quantities  : {', '.join(m['features'])}")
 
     print("\n=== Stage 3: task metric, confidential model vs the MEASURED labels ===")
-    acc = float((lab_ref == yte).mean())
-    prec, rec, f1 = prf(yte, lab_ref)
+    base = float(yte.mean())
     print(f"records             : {len(Y)}")
-    print(f"base rate           : {100*yte.mean():.1f}% eligible (measured reduction >= threshold)")
-    print(f"accuracy            : {acc:.3f}")
-    print(f"ROC-AUC             : {roc_auc(yte, p_ref):.3f}")
-    print(f"precision/recall/F1 : {prec:.3f} / {rec:.3f} / {f1:.3f}")
-    print("targeting deciles   : (how utilities actually use a targeting score)")
-    for pct, k, cap, share in decile_lift(yte, p_ref):
-        print(f"  top {pct:>2d}% ({k:>3d} households) contains {cap:>3d} eligibles = {share:.1f}% of all eligibles")
+    print(f"base rate           : {100*base:.1f}% eligible (measured reduction >= threshold)")
+    print(f"ROC-AUC             : {roc_auc(yte, p_ref):.3f}   (ranking quality, threshold-free)")
+    k, prec, cap, lift, ncap = at_depth(yte, p_ref, TOP_FRACTION)
+    print(f"--- operating point: top {TOP_FRACTION*100:.0f}% by score ---")
+    print(f"households recruited: {k} of {len(Y)}")
+    print(f"precision (hit rate): {prec:.3f}   vs {base:.3f} if recruited at random")
+    print(f"lift over random    : {lift:.2f}x")
+    print(f"eligibles captured  : {100*cap:.1f}%  ({ncap} of {int(yte.sum())})")
+    print("--- recruitment-depth curve ---")
+    print(f"{'depth':>6} {'recruited':>10} {'precision':>10} {'capture':>9} {'lift':>6}")
+    for d in (1, 2, 3, 4, 5):
+        kk, pp, cc, ll, _ = at_depth(yte, p_ref, d / 10)
+        mark = "  <-- operating point" if abs(d / 10 - TOP_FRACTION) < 1e-9 else ""
+        print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}{mark}")
 
     print("\n=== Stage 3: activation-range feasibility check ===")
     print(f"logit (sigmoid input) test range: [{z.min():.3f}, {z.max():.3f}]  "

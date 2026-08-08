@@ -60,6 +60,7 @@ CBL_DAYS = 10                     # 10-in-10 customer baseline
 TEMP_KNOTS = [65.0, 75.0, 90.0]   # cooling-side CalTRACK breakpoints
 DESIGN_TEMP = 95.0                # ex-ante design condition for the peak predictor
 TARGET_BASE_RATE = 1.0 / 3.0
+TOP_FRACTION = 0.20               # recruitment depth quality is reported at
 
 hour_of = np.arange(HOURS) % 24
 day_of = np.arange(HOURS) // 24
@@ -357,10 +358,19 @@ print(f"logit train range   : [{logit_tr.min():.3f}, {logit_tr.max():.3f}]  std=
 print(f"sigmoid domain      : [{SIG_LO:.2f}, {SIG_HI:.2f}]  degree={DEGREE}")
 print(f"max |w*r*y| per slot: {op_max:.3e}  (CKKS operand magnitude sanity check)")
 print("---- confidential model quality vs the MEASURED labels ----")
-print(f"accuracy            : {acc:.3f}   (ceiling {ceil_acc:.3f}, majority {max(yte.mean(),1-yte.mean()):.3f})")
 print(f"ROC-AUC             : {auc:.3f}   (ceiling {ceil_auc:.3f})")
-print(f"precision/recall/F1 : {prec:.3f} / {rec:.3f} / {f1:.3f}")
 print(f"  ceiling = a model with perfect knowledge of every physical household")
 print(f"  parameter but still blind to behavioural willingness.")
+# Quality is quoted at a recruitment depth, the way a utility consumes a targeting
+# score, rather than at a probability cut. See the README for why top 20%.
+rank = np.argsort(-phat_te)
+base_te = float(yte.mean())
+print(f"--- operating point: top {TOP_FRACTION*100:.0f}% by score ---")
+k = max(1, int(round(len(yte) * TOP_FRACTION)))
+ncap = int(yte[rank[:k]].sum())
+print(f"households recruited: {k} of {len(yte)}")
+print(f"precision (hit rate): {ncap/k:.3f}   vs {base_te:.3f} if recruited at random")
+print(f"lift over random    : {(ncap/k)/base_te:.2f}x")
+print(f"eligibles captured  : {100*ncap/int(yte.sum()):.1f}%  ({ncap} of {int(yte.sum())})")
 print(f"wrote               : model/derivation.txt (public), model/model.txt (confidential)")
 print(f"                      data/test_inputs.csv, data/train_inputs.csv, data/test_labels.csv")

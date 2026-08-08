@@ -197,18 +197,17 @@ PY
   grep -h "ring-level\|record-pass\|hollow recording" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. application quality (LEAD: real accuracy/AUC vs the TRUE labels) ----
-# The model is FITTED to an independent Bernoulli-sampled label with a documented
-# base rate, so its quality is measurable. These are the fitted model's
-# predictions vs the TRUE labels over the full labeled test set. The per-household
-# prediction is exactly the function the encrypted circuit evaluates (the faithful
-# twin); the encrypted run reproduces it to ~1e-7 — certified on the sampled
-# households by the FHE-vs-twin fidelity gate immediately below.
+# ---- 5. application quality (LEAD: ranking quality + the recruitment operating point)
+# The labels are MEASURED (10-in-10 CBL minus actual event load, thresholded in kW),
+# so the model's quality is measurable. Reported the way a utility consumes a
+# targeting score: rank households and recruit down the list. Every figure below is
+# quoted at ONE operating point, the top 20% by score; see the README for why.
 echo
-echo "=== application quality (fitted model vs true labels, labeled test set) ==="
+echo "=== application quality (confidential model vs measured labels, full test set) ==="
 python3 - "$TWIN" "$ROOT/data/test_labels.csv" "$NREC" <<'PY'
 import sys
 twin_path, lab_path, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
+TOP = 0.20                       # operating point: top 20% by score
 probs=[]
 for line in open(twin_path):
     line=line.strip()
@@ -221,9 +220,7 @@ for line in open(lab_path):
     try: y.append(int(line.split(',')[1]))
     except ValueError: continue   # skip the CSV header row
 n=min(len(probs),len(y)); probs=probs[:n]; y=y[:n]
-pred=[1 if p>0.5 else 0 for p in probs]
-base=sum(y)/n
-acc=sum(1 for p,t in zip(pred,y) if p==t)/n
+base=sum(y)/n; npos=sum(y)
 # ROC-AUC via average-rank of the positive class (tie-aware Mann-Whitney).
 order=sorted(range(n), key=lambda i: probs[i])
 ranks=[0.0]*n; i=0
@@ -233,21 +230,31 @@ while i<n:
     avg=(i+j)/2.0+1.0
     for k in range(i,j+1): ranks[order[k]]=avg
     i=j+1
-npos=sum(y); nneg=n-npos
+nneg=n-npos
 sumpos=sum(ranks[k] for k in range(n) if y[k]==1)
 auc=(sumpos-npos*(npos+1)/2)/(npos*nneg) if npos and nneg else float('nan')
-tp=sum(1 for p,t in zip(pred,y) if p==1 and t==1)
-fp=sum(1 for p,t in zip(pred,y) if p==1 and t==0)
-fn=sum(1 for p,t in zip(pred,y) if p==0 and t==1)
-prec=tp/(tp+fp) if tp+fp else 0.0
-rec=tp/(tp+fn) if tp+fn else 0.0
-f1=2*prec*rec/(prec+rec) if prec+rec else 0.0
-print(f"labeled test households    : {n}")
-print(f"base rate (true labels)    : {100*base:.1f}% eligible")
-print(f"accuracy                   : {acc:.3f}")
-print(f"ROC-AUC                    : {auc:.3f}")
-print(f"precision / recall / F1    : {prec:.3f} / {rec:.3f} / {f1:.3f}  (positive = eligible)")
-print(f"summary                    : base rate {100*base:.0f}% eligible; accuracy {acc:.2f}, AUC {auc:.2f}")
+rank=sorted(range(n), key=lambda i: -probs[i])
+def at(frac):
+    k=max(1,int(round(n*frac))); cap=sum(y[i] for i in rank[:k])
+    prec=cap/k
+    return k, prec, (cap/npos if npos else float('nan')), (prec/base if base else float('nan')), cap
+print(f"records                    : {n}")
+print(f"base rate (measured labels): {100*base:.1f}% eligible ({npos} of {n})")
+print(f"ROC-AUC                    : {auc:.3f}   (ranking quality, threshold-free)")
+k, prec, cap, lift, ncap = at(TOP)
+print(f"--- operating point: top {TOP*100:.0f}% by score ---")
+print(f"households recruited       : {k} of {n}")
+print(f"precision (hit rate)       : {prec:.3f}   vs {base:.3f} if recruited at random")
+print(f"lift over random           : {lift:.2f}x")
+print(f"eligibles captured         : {100*cap:.1f}%  ({ncap} of {npos})")
+print("--- recruitment-depth curve ---")
+print(f"{'depth':>6} {'recruited':>10} {'precision':>10} {'capture':>9} {'lift':>6}")
+for d in (1,2,3,4,5):
+    kk, pp, cc, ll, _ = at(d/10)
+    mark = "  <-- operating point" if abs(d/10-TOP) < 1e-9 else ""
+    print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}{mark}")
+print(f"summary                    : AUC {auc:.2f}; recruiting the top {TOP*100:.0f}% hits "
+      f"{100*prec:.0f}% eligible vs {100*base:.0f}% at random, capturing {100*cap:.0f}% of them")
 print(f"(predictions the encrypted run reproduces; fidelity certified below on the "
       f"{nrec}-household encrypted sample)")
 PY

@@ -45,34 +45,37 @@ regulated settlement.
 
 | Comparison | What it measures | Result |
 |---|---|---|
-| reference → measured labels | model task quality | accuracy **0.775**, ROC-AUC **0.839**, precision/recall/F1 **0.568 / 0.664 / 0.612**, at a 26.8% eligible base rate (400 held-out households) |
+| reference → measured labels | model task quality | ROC-AUC **0.839**; at the top-20% recruitment depth, precision **0.600** (lift **2.24×** over a 26.8% base rate), capturing **44.9%** of eligibles (400 held-out households) |
 | **twin → reference** | cost of the polynomial sigmoid | max \|Δprob\| **1.579e-4**, mean **7.381e-5**, **0 decision flips** / 400 |
 | **FHE → twin** | cost of encryption | `--cpu`: max **4.292e-7** (6 recs); `--sim` / `--sim-full`: **3.715e-7** (3 recs); **Fog**: **3.715e-7** (2 recs); **0 flips** everywhere; below the 5.462e-5 tolerance |
 
 ### Reading the model-quality row
 
-The labels are noisy by construction, because event response is driven by a
-behavioural `willingness` parameter that never appears in metered load. The
-useful comparison is therefore against the **achievable ceiling**: what a model with perfect
-knowledge of every *physical* household parameter, but still blind to
-willingness, achieves.
+**The operating point.** A utility ranks households and recruits down the list to
+a budget or capacity target, so quality is quoted at a recruitment depth rather
+than a probability cut. Decile ranking is the reporting convention for targeting
+models, and top-decile lift is the standard published benchmark (customer-targeting
+work generally reports 2.0× to 3.5×). Precision here holds flat through the first
+two deciles and falls from the third, so **top 20%** is the deepest depth that
+still recruits at the full hit rate, capturing twice the eligibles of a top-10%
+cut at identical precision.
 
-| | Confidential model | Achievable ceiling | Majority class |
-|---|---|---|---|
-| Accuracy | 0.775 | 0.772 | 0.732 |
-| ROC-AUC | 0.839 | 0.839 | 0.500 |
+| Recruitment depth | Recruited | Precision | Eligibles captured | Lift |
+|---|---|---|---|---|
+| top 10% | 40 | 0.600 | 22.4% | 2.24× |
+| **top 20%** | **80** | **0.600** | **44.9%** | **2.24×** |
+| top 30% | 120 | 0.567 | 63.6% | 2.12× |
+| top 40% | 160 | 0.512 | 76.6% | 1.92× |
+| top 50% | 200 | 0.475 | 88.8% | 1.78× |
 
-The six derived quantities extract **everything extractable** from the baseline
-period: AUC 0.839 against a ceiling of 0.839. The remaining gap to perfect
-prediction is behavioural.
-
-**Targeting deciles** (how a utility actually consumes a targeting score):
-
-| Ranked by score | Households | Eligibles captured | Share of all eligibles |
-|---|---|---|---|
-| top 10% | 40 | 24 | 22.4% |
-| top 20% | 80 | 48 | 44.9% |
-| top 30% | 120 | 68 | 63.6% |
+**Read against the achievable ceiling.** The labels are noisy by construction,
+because event response is driven by a behavioural `willingness` parameter that
+never appears in metered load. A model with perfect knowledge of every *physical*
+household parameter, but still blind to willingness, also reaches **ROC-AUC
+0.839**. The six derived quantities therefore extract everything extractable from
+the baseline period, and the remaining gap to perfect prediction is behavioural.
+Because that ceiling is a property of the synthetic generator, these figures
+demonstrate the pipeline rather than forecast real-world performance.
 
 ## Pass criterion and verdict
 
