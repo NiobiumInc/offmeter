@@ -125,13 +125,9 @@ def prf(y, pred):
     return prec, rec, (2 * prec * rec / (prec + rec) if prec + rec else 0.0)
 
 
-# Operating point: utilities rank households and recruit down the list to a budget
-# or capacity target, so quality is quoted at a recruitment depth rather than at a
-# probability cut. Top 20% is the deepest depth at which precision has not yet
-# degraded on this data (see README).
-TOP_FRACTION = 0.20
-
-
+# The deployed protocol scores one household, which thresholds its own probability
+# at 0.5, so that is the operating point reported first. at_depth() supports the
+# supplementary view of the same score under a ranked deployment.
 def at_depth(y, s, frac):
     """(recruited, precision, capture, lift, n_captured) at a recruitment depth."""
     order = np.argsort(-s)
@@ -169,18 +165,18 @@ def main():
     print(f"records             : {len(Y)}")
     print(f"base rate           : {100*base:.1f}% eligible (measured reduction >= threshold)")
     print(f"ROC-AUC             : {roc_auc(yte, p_ref):.3f}   (ranking quality, threshold-free)")
-    k, prec, cap, lift, ncap = at_depth(yte, p_ref, TOP_FRACTION)
-    print(f"--- operating point: top {TOP_FRACTION*100:.0f}% by score ---")
-    print(f"households recruited: {k} of {len(Y)}")
-    print(f"precision (hit rate): {prec:.3f}   vs {base:.3f} if recruited at random")
-    print(f"lift over random    : {lift:.2f}x")
-    print(f"eligibles captured  : {100*cap:.1f}%  ({ncap} of {int(yte.sum())})")
-    print("--- recruitment-depth curve ---")
+    sel = p_ref > 0.5
+    k = int(sel.sum()); tp = int(yte[sel].sum()); npos = int(yte.sum())
+    print("--- the answer a household receives: its own score, thresholded at 0.5 ---")
+    print(f"told eligible       : {k} of {len(Y)} households ({100*k/len(Y):.1f}%)")
+    print(f"precision           : {tp/k:.3f}   told eligible and truly eligible")
+    print(f"                      {base:.3f} for a household picked at random ({(tp/k)/base:.2f}x)")
+    print(f"recall              : {tp/npos:.3f}   of truly eligible households are told so")
+    print("--- the same score at fixed selection depths (for a ranked deployment) ---")
     print(f"{'depth':>6} {'recruited':>10} {'precision':>10} {'capture':>9} {'lift':>6}")
     for d in (1, 2, 3, 4, 5):
         kk, pp, cc, ll, _ = at_depth(yte, p_ref, d / 10)
-        mark = "  <-- operating point" if abs(d / 10 - TOP_FRACTION) < 1e-9 else ""
-        print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}{mark}")
+        print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}")
 
     print("\n=== Stage 3: activation-range feasibility check ===")
     print(f"logit (sigmoid input) test range: [{z.min():.3f}, {z.max():.3f}]  "

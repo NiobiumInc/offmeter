@@ -197,17 +197,16 @@ PY
   grep -h "ring-level\|record-pass\|hollow recording" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. application quality (LEAD: ranking quality + the recruitment operating point)
-# The labels are MEASURED (10-in-10 CBL minus actual event load, thresholded in kW),
-# so the model's quality is measurable. Reported the way a utility consumes a
-# targeting score: rank households and recruit down the list. Every figure below is
-# quoted at ONE operating point, the top 20% by score; see the README for why.
+# ---- 5. application quality (LEAD: the decision a household actually receives) --
+# The labels are MEASURED (10-in-10 CBL minus actual event load, thresholded in kW).
+# The deployed protocol scores ONE household per request and that household
+# thresholds its own probability at 0.5, so 0.5 is the operating point reported
+# first. The depth table below shows the same score under a ranked deployment.
 echo
 echo "=== application quality (confidential model vs measured labels, full test set) ==="
 python3 - "$TWIN" "$ROOT/data/test_labels.csv" "$NREC" <<'PY'
 import sys
 twin_path, lab_path, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
-TOP = 0.20                       # operating point: top 20% by score
 probs=[]
 for line in open(twin_path):
     line=line.strip()
@@ -220,8 +219,7 @@ for line in open(lab_path):
     try: y.append(int(line.split(',')[1]))
     except ValueError: continue   # skip the CSV header row
 n=min(len(probs),len(y)); probs=probs[:n]; y=y[:n]
-base=sum(y)/n; npos=sum(y)
-# ROC-AUC via average-rank of the positive class (tie-aware Mann-Whitney).
+npos=sum(y); base=npos/n
 order=sorted(range(n), key=lambda i: probs[i])
 ranks=[0.0]*n; i=0
 while i<n:
@@ -233,28 +231,25 @@ while i<n:
 nneg=n-npos
 sumpos=sum(ranks[k] for k in range(n) if y[k]==1)
 auc=(sumpos-npos*(npos+1)/2)/(npos*nneg) if npos and nneg else float('nan')
-rank=sorted(range(n), key=lambda i: -probs[i])
-def at(frac):
-    k=max(1,int(round(n*frac))); cap=sum(y[i] for i in rank[:k])
-    prec=cap/k
-    return k, prec, (cap/npos if npos else float('nan')), (prec/base if base else float('nan')), cap
-print(f"records                    : {n}")
+print(f"records                    : {n}  (labeled development set, scored in the clear)")
 print(f"base rate (measured labels): {100*base:.1f}% eligible ({npos} of {n})")
 print(f"ROC-AUC                    : {auc:.3f}   (ranking quality, threshold-free)")
-k, prec, cap, lift, ncap = at(TOP)
-print(f"--- operating point: top {TOP*100:.0f}% by score ---")
-print(f"households recruited       : {k} of {n}")
-print(f"precision (hit rate)       : {prec:.3f}   vs {base:.3f} if recruited at random")
-print(f"lift over random           : {lift:.2f}x")
-print(f"eligibles captured         : {100*cap:.1f}%  ({ncap} of {npos})")
-print("--- recruitment-depth curve ---")
-print(f"{'depth':>6} {'recruited':>10} {'precision':>10} {'capture':>9} {'lift':>6}")
+sel=[i for i in range(n) if probs[i]>0.5]
+tp=sum(y[i] for i in sel); k=len(sel)
+prec=tp/k if k else float('nan'); rec=tp/npos if npos else float('nan')
+print(f"--- the answer a household receives: its own score, thresholded at 0.5 ---")
+print(f"told eligible              : {k} of {n} households ({100*k/n:.1f}%)")
+print(f"precision                  : {prec:.3f}   told eligible and truly eligible")
+print(f"                             {base:.3f} for a household picked at random ({prec/base:.2f}x)")
+print(f"recall                     : {rec:.3f}   of truly eligible households are told so")
+rank=sorted(range(n), key=lambda i: -probs[i])
+print("--- the same score at fixed selection depths (for a ranked deployment) ---")
+print(f"{'depth':>6} {'selected':>9} {'precision':>10} {'capture':>9} {'lift':>6}")
 for d in (1,2,3,4,5):
-    kk, pp, cc, ll, _ = at(d/10)
-    mark = "  <-- operating point" if abs(d/10-TOP) < 1e-9 else ""
-    print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}{mark}")
-print(f"summary                    : AUC {auc:.2f}; recruiting the top {TOP*100:.0f}% hits "
-      f"{100*prec:.0f}% eligible vs {100*base:.0f}% at random, capturing {100*cap:.0f}% of them")
+    kk=max(1,int(round(n*d/10))); cap=sum(y[i] for i in rank[:kk])
+    print(f"{d*10:>5}% {kk:>9} {cap/kk:>10.3f} {100*cap/npos:>8.1f}% {(cap/kk)/base:>6.2f}")
+print(f"summary                    : AUC {auc:.2f}; a household told eligible truly is "
+      f"{100*prec:.0f}% of the time, vs {100*base:.0f}% at random")
 print(f"(predictions the encrypted run reproduces; fidelity certified below on the "
       f"{nrec}-household encrypted sample)")
 PY

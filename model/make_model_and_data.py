@@ -60,7 +60,6 @@ CBL_DAYS = 10                     # 10-in-10 customer baseline
 TEMP_KNOTS = [65.0, 75.0, 90.0]   # cooling-side CalTRACK breakpoints
 DESIGN_TEMP = 95.0                # ex-ante design condition for the peak predictor
 TARGET_BASE_RATE = 1.0 / 3.0
-TOP_FRACTION = 0.20               # recruitment depth quality is reported at
 
 hour_of = np.arange(HOURS) % 24
 day_of = np.arange(HOURS) // 24
@@ -361,16 +360,14 @@ print("---- confidential model quality vs the MEASURED labels ----")
 print(f"ROC-AUC             : {auc:.3f}   (ceiling {ceil_auc:.3f})")
 print(f"  ceiling = a model with perfect knowledge of every physical household")
 print(f"  parameter but still blind to behavioural willingness.")
-# Quality is quoted at a recruitment depth, the way a utility consumes a targeting
-# score, rather than at a probability cut. See the README for why top 20%.
-rank = np.argsort(-phat_te)
+# The deployed protocol scores one household, which thresholds its own probability
+# at 0.5, so that is the operating point reported.
 base_te = float(yte.mean())
-print(f"--- operating point: top {TOP_FRACTION*100:.0f}% by score ---")
-k = max(1, int(round(len(yte) * TOP_FRACTION)))
-ncap = int(yte[rank[:k]].sum())
-print(f"households recruited: {k} of {len(yte)}")
-print(f"precision (hit rate): {ncap/k:.3f}   vs {base_te:.3f} if recruited at random")
-print(f"lift over random    : {(ncap/k)/base_te:.2f}x")
-print(f"eligibles captured  : {100*ncap/int(yte.sum()):.1f}%  ({ncap} of {int(yte.sum())})")
+k = int(pred_te.sum()); tp = int(yte[pred_te == 1].sum()); npos_te = int(yte.sum())
+print("--- the answer a household receives: its own score, thresholded at 0.5 ---")
+print(f"told eligible       : {k} of {len(yte)} households ({100*k/len(yte):.1f}%)")
+print(f"precision           : {tp/k:.3f}   told eligible and truly eligible")
+print(f"                      {base_te:.3f} for a household picked at random ({(tp/k)/base_te:.2f}x)")
+print(f"recall              : {tp/npos_te:.3f}   of truly eligible households are told so")
 print(f"wrote               : model/derivation.txt (public), model/model.txt (confidential)")
 print(f"                      data/test_inputs.csv, data/train_inputs.csv, data/test_labels.csv")
