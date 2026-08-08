@@ -103,7 +103,7 @@ done
 # the GITIGNORED ledgers this script gates on (twin_outputs.csv, noise_tolerance.txt) —
 # regenerated, never committed — so a fresh clone must produce them once before any run.
 # Fail early with a clear pointer instead of a raw Python traceback partway through.
-for f in "$ROOT/model/model.txt" "$INPUTS" "$ROOT/data/test_labels.csv"; do
+for f in "$ROOT/model/model.txt" "$ROOT/model/derivation.txt" "$INPUTS" "$ROOT/data/test_labels.csv"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — regenerate: python3 model/make_model_and_data.py"; exit 1; }
 done
 for f in "$TWIN" "$TOL_FILE"; do
@@ -111,6 +111,7 @@ for f in "$TWIN" "$TOL_FILE"; do
 done
 
 echo "############ demand-response run_test ($MODE, NREC=$NREC) ############"
+echo "Encrypted scoring is compute-intensive: expect up to a couple of minutes per household."
 
 # ---- 1. keygen (client home only) -----------------------------------------
 t0=$(date +%s.%N)
@@ -119,7 +120,9 @@ t1=$(date +%s.%N)
 
 # ---- 2. provision server home (NO secret key, NO inputs) -------------------
 cp "$CLIENT/cc.bin" "$CLIENT/pk.bin" "$CLIENT/mk.bin" "$CLIENT/rk.bin" "$SERVER/"
-cp "$ROOT/model/model.txt" "$SERVER/"
+# The server gets both layers: the PUBLIC CalTRACK/TOWT derivation and the
+# utility's CONFIDENTIAL scoring weights. Neither is ever sent to the client.
+cp "$ROOT/model/model.txt" "$ROOT/model/derivation.txt" "$SERVER/"
 if [ -f "$SERVER/sk.bin" ]; then echo "[FATAL] sk leaked into server home"; exit 1; fi
 echo "provisioned server home: $(ls "$SERVER" | tr '\n' ' ')"
 echo "  asserted: secret key ABSENT from server home  ✓"
