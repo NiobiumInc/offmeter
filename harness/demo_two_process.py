@@ -179,6 +179,10 @@ def client_flow():
     put("derivation.txt", os.path.join(ROOT, "model", "derivation.txt"))
     put("model.txt", os.path.join(ROOT, "model", "model.txt"))
 
+    if NREC > 1:
+        print(f"[demo]   validation sweep: households {HOUSEHOLD}-{HOUSEHOLD + NREC - 1} "
+              f"share the one key set above, so this is a test shape; a deployment "
+              f"gives each household keys of its own")
     probs = []
     for i in range(HOUSEHOLD, HOUSEHOLD + NREC):
         print(f"[client] encrypting household row {i} (28-day hourly kWh series)")
