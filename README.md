@@ -46,6 +46,10 @@ your own device.
 ## Contents
 
 - [Run it](#run-it): Docker and nothing else
+  - [Way 1: score one household (default)](#way-1-score-one-household-default)
+  - [Way 1b: score a different household](#way-1b-score-a-different-household)
+  - [Way 2: score several households (debug / eval mode)](#way-2-score-several-households-debug--eval-mode)
+  - [Run it as a real client/server split](#run-it-as-a-real-clientserver-split)
 - [Evaluation data & features](#evaluation-data--features)
 - [Is it practical?](#is-it-practical)
 - [Comparing to the cleartext model](#comparing-to-the-cleartext-model)
@@ -150,14 +154,27 @@ your own machine and check it against the plain result:
 Both use the four execution targets above. They differ in how many households are
 scored.
 
-#### Way 1: score one household, which is how the application works
+#### Way 1: score one household (default)
 
-The default. One household encrypts its own 28-day meter history, the utility
-scores it blind, and that household decrypts a single answer nobody else can read.
+One household encrypts its own 28-day meter history, the utility scores it blind,
+and that household decrypts a single answer nobody else can read.
 
 ```bash
 ./run-in-container.sh "./run_test.sh --cpu"
 ```
+
+```
+=== your result ===
+household scored        : 0
+eligibility probability : 0.0694
+your answer             : not eligible
+measured truth for you  : not eligible
+decrypted with your own secret key; the server only ever held ciphertext
+```
+
+About 25 seconds.
+
+#### Way 1b: score a different household
 
 `HOUSEHOLD` picks which row of `data/test_inputs.csv` to score, 0 to 399,
 defaulting to 0:
@@ -175,11 +192,11 @@ measured truth for you  : eligible
 decrypted with your own secret key; the server only ever held ciphertext
 ```
 
-About 25 seconds. The answer is not always right: household 42 scores 0.6366 and
-is told ELIGIBLE while its measured truth is not eligible. How often that happens
-is what the quality figures below the result are for.
+The answer is not always right: household 42 scores 0.6366 and is told ELIGIBLE
+while its measured truth is not eligible. How often that happens is what the
+quality figures below the result are for.
 
-#### Way 2: score several households, to sample the encryption more widely
+#### Way 2: score several households (debug / eval mode)
 
 One household proves the pipeline end to end. `NREC` scores that many
 **consecutive** households starting at `HOUSEHOLD`, which gives the
@@ -197,8 +214,8 @@ to the fidelity gate, where a handful is plenty; encrypting all 400 would take
 about 85 minutes and tell you nothing extra. Six households take about 90 seconds.
 
 The sweep reuses one key set across its rows to stay fast, and labels itself as
-doing so in the output. Way 1 is the shape a deployment has, where each household
-holds keys of its own.
+doing so in the output. Ways 1 and 1b are the shape a deployment has, where each
+household holds keys of its own.
 
 ### Run it as a real client/server split
 
