@@ -100,14 +100,19 @@ int main(int argc, char* argv[]) {
         if (rk.is_open() && !cc->DeserializeEvalAutomorphismKey(rk, SerType::BINARY))
             throw std::runtime_error("load rk failed");
     }
+    // The public CalTRACK/TOWT derivation and the utility's confidential model.
+    Derivation deriv = load_derivation(home + "/derivation.txt");
     Model model = load_model(home + "/model.txt");
+    std::cout << "derivation: " << deriv.rows.size() << " public rows over "
+              << deriv.series_len << " hourly slots; confidential model over "
+              << model.features.size() << " derived quantities" << std::endl;
     Ciphertext<DCRTPoly> ct_x;
     if (!Serial::DeserializeFromFile(home + "/ct_x.bin", ct_x, SerType::BINARY))
         throw std::runtime_error("load ct_x failed");
     std::cout << "received " << fs::file_size(home + "/ct_x.bin")
               << " bytes of ciphertext (still encrypted)" << std::endl;
 
-    CircuitPlaintexts pts = build_plaintexts(cc, model);
+    CircuitPlaintexts pts = build_plaintexts(cc, model, deriv);
 
     // ---- CPU path: plain OpenFHE ------------------------------------------
     if (mode == Mode::CPU) {
@@ -132,9 +137,8 @@ int main(int argc, char* argv[]) {
     niobium::compiler().capture_crypto_context(cc);
     niobium::compiler().tag_input("ct_x", ct_x);
     // tag every hand-built plaintext operand BEFORE start() (recorder caveat).
-    niobium::compiler().tag_input("w_hourly", pts.w_hourly);
-    niobium::compiler().tag_input("w_total_vec", pts.w_total_vec);
-    niobium::compiler().tag_input("w_peak_vec", pts.w_peak_vec);
+    for (size_t j = 0; j < pts.feat.size(); ++j)
+        niobium::compiler().tag_input(pts.names[j], pts.feat[j]);
     niobium::compiler().tag_input("bias_vec", pts.bias_vec);
     niobium::compiler().tag_input("mask_slot0", pts.mask_slot0);
     niobium::compiler().tag_keys(cc);

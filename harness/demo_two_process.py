@@ -7,15 +7,17 @@ exchanging serialized ciphertext — never keys-that-decrypt, never plaintext.
 
   server process (run_demo/server_home) — the utility / compute provider:
     - REFUSES to start if a secret key is present in its home (exit 13)
-    - setup endpoint receives the crypto context + public/eval keys + the
-      public model (model.txt)
+    - setup endpoint receives the crypto context + public/eval keys, and holds
+      the utility's own two model layers: the PUBLIC CalTRACK/TOWT derivation
+      (derivation.txt) and its CONFIDENTIAL weights (model.txt), which are
+      never disclosed to the household
     - runs the generated `dr_server` binary (--cpu) on the encrypted household
     - logs ONLY byte counts — it never sees (and cannot see) a usage profile
       or an eligibility score
   client process (run_demo/client_home) — the household / biobank:
     - generates all keys with `dr_keygen`; the secret key (sk.bin) NEVER
       crosses the wire
-    - encrypts one household's 24-hour profile per request, uploads the
+    - encrypts one household's 28-day hourly series per request, uploads the
       ciphertext, downloads the encrypted result, decrypts, prints the
       eligibility probability
 
@@ -158,15 +160,22 @@ def client_flow():
     print("[client] generating keys (secret key sk.bin stays in my home)")
     run([os.path.join(BUILD, "dr_keygen"), CLIENT], cwd=CLIENT)
 
-    print("[client] SETUP upload: crypto context + public/eval keys + public "
-          "model (no secret key crosses the wire)")
+    # The client uploads only the crypto context and public/eval keys. The two
+    # model layers belong to the UTILITY and are staged here purely because this
+    # demo runs both sides on one machine; in a deployment the server already
+    # holds them and the household never sees model.txt at all.
+    print("[client] SETUP upload: crypto context + public/eval keys "
+          "(no secret key crosses the wire)")
     for f in SETUP_KEYS:
         put(f, os.path.join(CLIENT, f))
+    print("[setup]  staging the utility's own model files on the server "
+          "(public derivation + confidential weights)")
+    put("derivation.txt", os.path.join(ROOT, "model", "derivation.txt"))
     put("model.txt", os.path.join(ROOT, "model", "model.txt"))
 
     probs = []
     for i in range(NREC):
-        print(f"[client] encrypting household row {i} (24-hour kWh profile)")
+        print(f"[client] encrypting household row {i} (28-day hourly kWh series)")
         ct = os.path.join(CLIENT, f"ct_x_{i}.bin")
         run([os.path.join(BUILD, "dr_encrypt"), CLIENT, INPUTS, str(i), ct],
             cwd=CLIENT)

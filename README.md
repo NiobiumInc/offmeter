@@ -1,8 +1,8 @@
 # Offmeter
 
 _Private demand-response eligibility scoring under FHE: the utility scores your
-household on its **encrypted** 24-hour smart-meter profile and never sees the usage
-itself._
+household on its **encrypted** smart-meter history and never sees the usage
+itself, while the utility's model stays its own._
 
 _Created with the [Niobium FHE Application Design assistant (FHEanna)](https://www.skills.sh/niobiuminc/niobium-skills/fhe-application-design) (v0.13.0)._
 
@@ -28,17 +28,20 @@ moments. Scoring you has meant letting the utility
 
 This application removes the catch. The utility scores your eligibility **on your
 encrypted usage** and never sees the usage itself. Your household sends an
-encrypted copy of its 24-hour electricity profile; the utility runs its scoring
-model directly on that encrypted data and sends back an encrypted result that
-**only you can unlock**. The utility learns whether you qualify, and nothing
-else about your day.
+encrypted copy of its meter history; the utility runs its scoring model directly
+on that encrypted data and sends back an encrypted result that **only you can
+unlock**. You learn whether you qualify. The utility learns nothing at all.
 
-**What it does, end to end.** From your encrypted hourly readings it works out
-(still encrypted) the two things the model needs (your total daily use and your
-evening-peak use, 5–9pm), runs the utility's eligibility model, and returns an
-encrypted probability. You unlock it at home and get a simple eligible /
-not-eligible answer. At no point does your usage, the intermediate totals, or the
-score exist in the clear anywhere but your own device.
+**Both sides keep something back.** The utility's scoring weights are its own
+asset and stay on its server. Your usage stays on your device. Encryption is what
+lets the calculation happen across that gap.
+
+**What it does, end to end.** From your encrypted hourly readings it works out,
+still encrypted, the six quantities the model needs, runs the utility's
+confidential scoring model, and returns an encrypted probability. You unlock it
+at home and get a simple eligible / not-eligible answer. At no point does your
+usage, any intermediate quantity, or the score exist in the clear anywhere but
+your own device.
 
 ## Evaluation data & features
 
@@ -50,30 +53,45 @@ score exist in the clear anywhere but your own device.
 > the same protocol and guarantees carry over.
 
 **Evaluation set:** 400 held-out households (`data/test_inputs.csv`), fit on a
-200-household training split. Each household is described by its private **24-hour
-electricity-usage profile** (one kWh value per hour). The pipeline outputs an
-**eligibility probability** (sigmoid), thresholded at 0.5 → *eligible / not eligible*
-for a demand-response program; the ground-truth label is drawn from an *independent*
-latent process (base rate ≈ 1/3 eligible), so the fitted model is a genuine, imperfect
-predictor.
+separate 3,000-household training split (`data/train_inputs.csv` ships the first
+100 of that split as a representative sample). Each household is described by its
+private **28-day hourly consumption series** of 672 kWh values. The pipeline
+outputs an **eligibility probability** (sigmoid), thresholded at 0.5 → *eligible /
+not eligible*.
 
-**Per-household features (encrypted and sent to the utility):**
+**The label is a measured load impact.** A demand-response event is simulated on a
+hot weekday; the household's Customer Baseline Load is computed **10-in-10 style**
+(the 5–9pm hours averaged over the 10 most recent similar weekdays); the actual
+event load is subtracted; the household is eligible if the measured reduction
+clears a kW threshold (base rate ≈ 27% eligible). That is the arithmetic a utility
+uses for settlement, so the label is produced by the measurement protocol applied
+to simulated behaviour.
+
+**Per-household input (encrypted and sent to the utility):**
 
 | Feature | Description | Count |
 |---|---|---|
-| `x[0] … x[23]` | Hourly electricity consumption (kWh), hour 0–23 | 24 values |
+| `y[0] … y[671]` | Hourly electricity consumption (kWh), 28 days × 24 h | 672 values |
 
-Two aggregates the **circuit derives** from the same 24 values (not extra inputs):
+**Six quantities the circuit derives** from those same 672 values (not extra
+inputs). The derivation is the CalTRACK/TOWT model form; because its regressors
+are the calendar and public weather, each quantity is a public linear functional
+of your encrypted series:
 
 | Derived value | Definition |
 |---|---|
-| `total_daily` | Sum of all 24 hourly values (total daily kWh) |
-| `evening_peak` | Sum of hours 17–21 (evening-peak load, the load-shedding signal) |
+| `cbl_peak` | 10-in-10 Customer Baseline Load for the 5–9pm event window |
+| `cool_slope_hi` | TOWT coefficient on the 75–90 °F cooling term (the AC-load proxy) |
+| `peak_towt_design` | TOWT-predicted event-window load at the 95 °F design condition |
+| `daily_mean` | Overall level (mean hourly kWh across the baseline) |
+| `midday_mean` | Daytime-occupancy proxy; daytime-heavy users shed less |
+| `weekend_evening_delta` | Weekend minus weekday evening load |
 
-The model is a logistic regression over the 24 hourly weights plus a total-use weight
-and an evening-peak weight, favouring evening-peak-concentrated consumption (good
-load-shedding candidates). Each household encrypts its **own** profile independently
-(24 of 32,768 slots used per record).
+The **confidential** model is a ridge logistic regression over those six
+quantities. Its weights live only on the utility's server (`model/model.txt`,
+committed here only so the demo runs); the public derivation is separate
+(`model/derivation.txt`). Each household encrypts its **own** series independently
+(672 of 32,768 slots used per record).
 
 ## Is it practical?
 
@@ -81,26 +99,33 @@ Measured on a laptop CPU, scoring one household:
 
 | | |
 |---|---|
-| Time to score one encrypted household | **~10 seconds** |
-| Memory on the utility's side | **~0.6 GB** |
-| Data per request | **~13 MB** up, **~7 MB** back |
-| One-time key setup (per household) | **~337 MB** |
+| Time to score one encrypted household | **~13 seconds** |
+| Memory on the utility's side | **~0.9 GB** |
+| Data per request | **13 MB** up, **7 MB** back |
+| One-time key setup (per household) | **607 MB** |
 | Accuracy cost of the encryption | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
-| Model quality (labeled synthetic test set) | **accuracy ≈ 0.77, ROC-AUC ≈ 0.80** at a ~37%-eligible base rate |
+| Model quality (measured labels, synthetic households) | **accuracy 0.775, ROC-AUC 0.839** at a 26.8%-eligible base rate |
 
-**Model quality.** The model is *fitted*, and its quality is measured. Each
-synthetic household carries an
-**independent** eligibility label drawn from a fixed latent process (base rate
-**~37% eligible**, an uneven split by construction), and the utility's logistic model is
-trained to predict that label. On a held-out 400-household test set the fitted
-model reaches **accuracy ≈ 0.77 and ROC-AUC ≈ 0.80** (precision / recall / F1
-≈ 0.76 / 0.54 / 0.63 on the eligible class). This is a real, imperfect result, since the
-labels carry noise and the truth is nonlinear. The data is still **synthetic**
-(generated from a fixed seed and a known latent function), so this demonstrates the
-private-scoring *pipeline* and gives a real but synthetic-domain accuracy. It is **not** a
-real-world-validated demand-response predictor. A utility would drop in its own
-model of the same shape, trained on real households. The encryption itself adds
-essentially no error; the model's real-world accuracy is the utility's to establish.
+**Model quality.** The model's quality is measured against labels produced by the
+settlement arithmetic described above. On the held-out
+400 households it reaches **accuracy 0.775 and ROC-AUC 0.839** (precision /
+recall / F1 = 0.568 / 0.664 / 0.612 on the eligible class).
+
+Those figures are read against the **achievable ceiling**. Event response is
+driven by a household's willingness to curtail, which never appears in metered
+load, so meter data caps how well any model can predict it. A model given perfect
+knowledge of every *physical* household parameter, while still blind to
+willingness, scores **accuracy 0.772, AUC 0.839**. The six derived quantities
+therefore extract essentially **everything extractable** from the baseline period,
+and the remaining gap is behavioural.
+
+In targeting terms, the top 20% of ranked households contain **44.9%** of all
+eligibles, and the top 30% contain **63.6%**.
+
+The households and weather are **synthetic** (fixed seed), so this demonstrates
+the private-scoring *pipeline* on a synthetic domain. The model form is the
+CalTRACK/TOWT specification used in regulated settlement, so a utility would swap
+in real AMI data and its own weights while keeping the structure.
 
 ## Run it
 
@@ -151,7 +176,8 @@ committed), so a fresh clone must produce them once before the first run:
 ./run-in-container.sh "python3 model/twin.py"
 ```
 
-The model and datasets (`model/model.txt`, `data/test_inputs.csv`, `data/test_labels.csv`)
+The model files and datasets (`model/model.txt`, `model/derivation.txt`,
+`data/test_inputs.csv`, `data/test_labels.csv`)
 are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run; only
 `twin.py` above. (`make clean` leaves `data/` untouched, so this step is one-time
 unless you delete the ledgers or change the model.)
@@ -219,7 +245,7 @@ Prefer plain shell? The same split done by hand:
   set -e
   ./build/dr_keygen client_home                       # client makes keys; secret key stays here
   mkdir -p server_home
-  cp client_home/{cc,pk,mk,rk}.bin model/model.txt server_home/   # server gets public/eval keys + model, no secret key
+  cp client_home/{cc,pk,mk,rk}.bin model/model.txt model/derivation.txt server_home/   # public/eval keys + both model layers, no secret key
   ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
   cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
   ./server_guard.sh ./build/dr_server server_home --cpu          # utility computes; guard refuses if sk present
@@ -262,10 +288,39 @@ limitation rather than an encryption one, and this is where you'd catch it.
 ## Under the hood
 
 The heavy math runs on ciphertext using the CKKS homomorphic-encryption scheme
-(via OpenFHE); the two usage aggregates are computed inside the encrypted
+(via OpenFHE); the six derived quantities are computed inside the encrypted
 computation, and the whole circuit is shallow (no bootstrapping). Design
 rationale, measured results, and the security/threat model are in
 `docs/`.
+
+## What's next
+
+Two extensions to this app.
+
+**Check the reference against OpenDSM.** The plaintext reference and the faithful
+twin (`model/twin.py`) are both written in this repository, so diffing them
+verifies that they were transcribed consistently.
+[OpenDSM](https://github.com/opendsm/opendsm) (Apache 2.0, an LF Energy project)
+implements the CalTRACK methods directly. Running it over the same inputs and
+diffing its output against the reference would establish that the derivation
+matches the published method, and would add an external agreement figure to
+`docs/results-report.md` beside the twin-vs-reference row. Vendoring OpenDSM
+carries Apache 2.0 attribution and NOTICE obligations, so check those against this
+repository's `LICENSE` first.
+
+**Swap in a real AMI dataset.** The households and weather here come from a seeded
+generator. The derivation needs three things: hourly consumption, matched hourly
+temperature, and a calendar. Any dataset carrying all three drives it unchanged.
+
+- [EnergyBench](https://huggingface.co/datasets/ai-iot/EnergyBench): 78,037 real
+  buildings at hourly resolution, CC-BY-SA-4.0. Weather accompanies roughly 13 of
+  its 67 constituent datasets, so select from those.
+- [OpenSTEF liander2024](https://huggingface.co/datasets/OpenSTEF/liander2024-energy-forecasting-benchmark):
+  Dutch DSO load with weather covering all of 2024.
+
+Real meter data also brings real event history, which would let the eligibility
+label come from observed reductions measured against the Customer Baseline Load
+rather than from a simulated event.
 
 ## Clean up
 
@@ -275,9 +330,9 @@ When you are done, remove the build tree and every per-run artifact:
 make clean
 ```
 
-This deletes the compiled `build/` tree, the per-mode run homes (`run_cpu`,
+This deletes the compiled `build/` tree, every per-mode run home (`run_cpu`,
 `run_sim`, `run_sim-full`, `run_fog`, `run_demo`), the `client_home`/`server_home`
-provisioning dirs, and the generated FHETCH trace directories (`dr_server_workload_*`,
-`nbcc_fhetch_replay_source_*`). `clean` lists these targets **explicitly** and never
-globs `run_*`, so it cannot delete `run_test.sh`. The committed inputs under `data/`
-are left untouched, so a later run does not need to regenerate them.
+provisioning dirs, the generated FHETCH trace and profile directories, and any
+`__pycache__`. The run-home glob matches **directories only** (`run_*/`), so it
+cannot delete `run_test.sh`. The committed inputs under `data/` are left untouched,
+so a later run does not need to regenerate them.
