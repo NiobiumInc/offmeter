@@ -238,7 +238,6 @@ extension is not checked, so `.csv` and `.txt` both work.
 
 ```bash
 ./run-in-container.sh "./run_test.sh --cpu --input my_usage.txt"
-./run-in-container.sh "./run_test.sh --cpu --input my_usage.csv"
 ./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
 ```
 
