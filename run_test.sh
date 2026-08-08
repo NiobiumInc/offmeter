@@ -111,7 +111,6 @@ for f in "$TWIN" "$TOL_FILE"; do
 done
 
 echo "############ demand-response run_test ($MODE, NREC=$NREC) ############"
-echo "Encrypted scoring is compute-intensive: expect up to a couple of minutes per household."
 
 # ---- 1. keygen (client home only) -----------------------------------------
 t0=$(date +%s.%N)
@@ -150,6 +149,8 @@ if [ "$MODE" = "fog" ]; then
 fi
 
 # ---- 4. per-household pipeline ---------------------------------------------
+echo
+echo "Encrypted scoring is compute-intensive: expect up to a couple of minutes per household."
 RESULTS="$RUN/decrypted.csv"; : > "$RESULTS"
 srv_secs=0; peak_rss_kb=0
 CTX_BYTES=0; CT_IN_BYTES=0; CT_OUT_BYTES=0
