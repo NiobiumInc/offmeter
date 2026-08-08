@@ -200,18 +200,10 @@ The sweep reuses one key set across its rows to stay fast, and labels itself as
 doing so in the output. Way 1 is the shape a deployment has, where each household
 holds keys of its own.
 
-### What every run prints
+### Run it as a real client/server split
 
-After the result, each run prints the model's **quality against the measured
-labels** (base rate, ROC-AUC, and how often an ELIGIBLE answer is correct),
-computed in the clear over the full 400-household labeled set. Then the
-encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin), the
-timings and data sizes above, and a check that a household's secret key never
-reaches the server (it refuses to start if it finds one).
-
-**3. See it as a real client/server split**, with two separate OS processes talking
-only over HTTP, the secret key living only on the client, only ciphertext crossing
-between them:
+Two separate OS processes talking only over HTTP, the secret key living only on
+the client, only ciphertext crossing between them:
 
 ```bash
 ./run-in-container.sh "python3 harness/demo_two_process.py"
@@ -238,7 +230,10 @@ secret key planted in the server home makes the server refuse to start (exit 13)
 The `run_demo/server_home/` folder is safe to place on an untrusted machine as-is.
 Point the client at it with `SERVER_URL=http://host:port` to run it truly split.
 
-Prefer plain shell? The same split done by hand:
+Prefer plain shell? The same split done by hand. There are no environment
+variables here: the household is the row index you pass to `dr_encrypt`, and you
+score another household by rerunning the encrypt/score/decrypt steps with a
+different one.
 
 ```bash
 ./run-in-container.sh '
@@ -246,7 +241,7 @@ Prefer plain shell? The same split done by hand:
   ./build/dr_keygen client_home                       # client makes keys; secret key stays here
   mkdir -p server_home
   cp client_home/{cc,pk,mk,rk}.bin model/model.txt model/derivation.txt server_home/   # public/eval keys + both model layers, no secret key
-  ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin
+  ./build/dr_encrypt client_home data/test_inputs.csv 0 client_home/ct_x.bin   # the 0 is the household
   cp client_home/ct_x.bin server_home/                # the wire: ciphertext only
   ./server_guard.sh ./build/dr_server server_home --cpu          # utility computes; guard refuses if sk present
   cp server_home/ct_result.bin client_home/           # the wire back: still encrypted
