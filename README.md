@@ -49,6 +49,7 @@ your own device.
   - [Way 1: score one household (default)](#way-1-score-one-household-default)
   - [Way 1b: score a different household](#way-1b-score-a-different-household)
   - [Way 2: score several households (debug / eval mode)](#way-2-score-several-households-debug--eval-mode)
+  - [Way 3: score your own usage](#way-3-score-your-own-usage)
   - [Run it as a real client/server split](#run-it-as-a-real-clientserver-split)
 - [Evaluation data & features](#evaluation-data--features)
 - [Is it practical?](#is-it-practical)
@@ -207,15 +208,51 @@ encrypted-vs-twin fidelity gate more than one sample:
 ./run-in-container.sh "HOUSEHOLD=100 NREC=6 ./run_test.sh --cpu"  # households 100-105
 ```
 
-There is no sweep-everything option, and you do not need one. The model-quality
-figures printed after every run **already cover all 400 households**, because they
-are computed in the clear from `model/twin.py`. `NREC` only adds encrypted samples
-to the fidelity gate, where a handful is plenty; encrypting all 400 would take
-about 85 minutes and tell you nothing extra. Six households take about 90 seconds.
+Six households take about 90 seconds. To run the whole set under encryption:
+
+```bash
+./run-in-container.sh "NREC=400 ./run_test.sh --cpu"              # all 400, ~85 minutes
+```
+
+Note that the model-quality figures printed after every run already cover all 400
+households: `model/twin.py` scores them in the clear, which is why they appear even
+on a single-household run. `NREC` adds encrypted samples to the fidelity gate.
 
 The sweep reuses one key set across its rows to stay fast, and labels itself as
 doing so in the output. Ways 1 and 1b are the shape a deployment has, where each
 household holds keys of its own.
+
+#### Way 3: score your own usage
+
+Point the run at your own meter data instead of the bundled households. A file of
+672 comma-separated hourly kWh readings (28 days x 24 hours), one household per
+row:
+
+```bash
+./run-in-container.sh "./run_test.sh --cpu --input my_usage.csv"
+./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
+```
+
+Or pass the readings inline:
+
+```bash
+./run-in-container.sh "./run_test.sh --cpu --values \"$(cat my_usage.csv)\""
+```
+
+```
+=== your result ===
+your usage              : from your own input
+eligibility probability : 0.0597
+your answer             : not eligible
+decrypted with your own secret key; the server only ever held ciphertext
+```
+
+The faithful twin is scored for your series on the fly, so the encryption-fidelity
+check still runs. Your own data has no measured label, so no truth column appears;
+the model-quality figures still come from the bundled labeled set.
+
+`HOUSEHOLD` past the end of the file, a sweep running past the last row, or a row
+without exactly 672 values are each rejected before any encryption starts.
 
 ### Run it as a real client/server split
 

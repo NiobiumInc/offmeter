@@ -25,8 +25,16 @@ usage() {
 run_test.sh — demand-response eligibility pipeline
   keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
 
-Usage: ./run_test.sh [--cpu | --sim | --sim-full | -h]
+Usage: ./run_test.sh [--cpu | --sim | --sim-full] [--input FILE | --values CSV] [-h]
   Scores ONE household (HOUSEHOLD=<row>, default 0) and returns one result.
+
+Score your own usage instead of the bundled data:
+  --input FILE   a .csv/.txt whose rows are 672 comma-separated hourly kWh values
+                 (28 days x 24 hours). HOUSEHOLD picks the row.
+  --values CSV   the same 672 values passed inline, as one comma-separated string.
+  Either way the faithful twin is scored for your series on the fly, so the
+  encryption-fidelity check still runs. There is no measured label for your own
+  data, so no truth column is shown.
   (no flag)   dispatch to the Niobium Fog (default; needs an API key). Records
               hollow (fast); the Fog reconstructs the real values on replay.
   --cpu       plain-OpenFHE local validation on your CPU
@@ -42,7 +50,7 @@ Env:
               set FOG_TARGET=FUNC_SIM for the hardware-free functional simulator)
   RINGCHK     set to --no-ring-dim-check to bypass the minimum-ring-dim security floor
               (unnecessary at N=2^16; opt in only for a deliberately small ring)
-  HOUSEHOLD   which household (row of data/test_inputs.csv) to score (default: 0)
+  HOUSEHOLD   which household (row of the input file) to score (default: 0)
   NREC        validation-sweep size (default: 1). The protocol scores one household
               per request; NREC>1 scores that many consecutive households to give the
               FHE-vs-twin gate more samples, each with its own freshly generated keys.
@@ -52,15 +60,19 @@ account at https://console.niobium.co/request-account.
 EOF
 }
 
-MODE="fog"; FLAG=""; SIMFULL=0
-case "${1:-}" in
-  --cpu) MODE="cpu"; FLAG="--cpu";;
-  --sim) MODE="sim"; FLAG="--sim";;
-  --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
-  "" )   MODE="fog"; FLAG="";;
-  -h|--help) usage; exit 0;;
-  *) usage; exit 2;;
-esac
+MODE="fog"; FLAG=""; SIMFULL=0; USER_INPUT=""; USER_VALUES=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cpu) MODE="cpu"; FLAG="--cpu";;
+    --sim) MODE="sim"; FLAG="--sim";;
+    --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
+    --input) shift; USER_INPUT="${1:?--input needs a file path}";;
+    --values) shift; USER_VALUES="${1:?--values needs comma-separated numbers}";;
+    -h|--help) usage; exit 0;;
+    *) usage; exit 2;;
+  esac
+  shift
+done
 
 FOG_TARGET="${FOG_TARGET:-FOG}"   # required by fog submit; FOG = real Niobium Fog (FUNC_SIM = HW-free sim)
 
@@ -82,6 +94,7 @@ NREC="${NREC:-1}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
 INPUTS="$ROOT/data/test_inputs.csv"
+OWN_DATA=0                        # 1 when scoring a user-supplied series
 TWIN="$ROOT/data/twin_outputs.csv"
 TOL_FILE="$ROOT/data/noise_tolerance.txt"
 RUN="$ROOT/run_${MODE}"; [ "$SIMFULL" = 1 ] && RUN="$ROOT/run_sim-full"
@@ -111,6 +124,49 @@ done
 for f in "$TWIN" "$TOL_FILE"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — generate the twin ledgers first: python3 model/twin.py"; exit 1; }
 done
+
+# ---- your own usage data (--input / --values) -------------------------------
+if [ -n "$USER_VALUES" ] && [ -n "$USER_INPUT" ]; then
+  echo "[FATAL] use --input OR --values, not both"; exit 2
+fi
+if [ -n "$USER_VALUES" ]; then
+  mkdir -p "$RUN"; INPUTS="$RUN/own_input.csv"
+  printf '%s\n' "$USER_VALUES" > "$INPUTS"
+  OWN_DATA=1; HOUSEHOLD=0
+elif [ -n "$USER_INPUT" ]; then
+  [ -f "$USER_INPUT" ] || { echo "[FATAL] --input file not found: $USER_INPUT"; exit 1; }
+  INPUTS="$USER_INPUT"; OWN_DATA=1
+fi
+
+# ---- bounds + shape checks on whatever input we ended up with ---------------
+SERIES_LEN=$(awk '$1=="series_len"{print $2}' "$ROOT/model/derivation.txt")
+python3 - "$INPUTS" "$HOUSEHOLD" "$NREC" "$SERIES_LEN" <<'PY'
+import sys
+path, first, nrec, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+rows = [l.strip() for l in open(path) if l.strip() and not l.startswith('#')]
+n = len(rows)
+if first < 0 or nrec < 1:
+    sys.exit(f"[FATAL] HOUSEHOLD must be >= 0 and NREC >= 1 (got {first}, {nrec})")
+if first >= n:
+    sys.exit(f"[FATAL] HOUSEHOLD={first} is out of range: {path} has {n} rows (0..{n-1})")
+if first + nrec > n:
+    sys.exit(f"[FATAL] HOUSEHOLD={first} NREC={nrec} runs past the end: "
+             f"{path} has {n} rows, so the most you can score from here is {n-first}")
+for k in range(first, first + nrec):
+    got = len(rows[k].split(','))
+    if got != need:
+        sys.exit(f"[FATAL] row {k} of {path} has {got} values, expected {need} "
+                 f"(28 days x 24 hourly kWh readings)")
+PY
+
+# A user-supplied series has no measured label and no precomputed twin row, so
+# score its faithful twin now and compare the encrypted run against that.
+if [ "$OWN_DATA" = 1 ]; then
+  TWIN="$RUN/own_twin.csv"; mkdir -p "$RUN"; : > "$TWIN"
+  for ((k=HOUSEHOLD; k<HOUSEHOLD+NREC; k++)); do
+    python3 "$ROOT/model/twin.py" --score "$INPUTS" "$k" >> "$TWIN"
+  done
+fi
 
 if [ "$NREC" -eq 1 ]; then
   echo "############ demand-response run_test ($MODE, household $HOUSEHOLD) ############"
@@ -211,41 +267,48 @@ done
 # population figures below are offline model validation on a labeled set.
 echo
 if [ "$NREC" -eq 1 ]; then echo "=== your result ==="; else echo "=== results (validation sweep) ==="; fi
-python3 - "$RESULTS" "$ROOT/data/test_labels.csv" "$HOUSEHOLD" "$NREC" <<'PY'
+python3 - "$RESULTS" "$ROOT/data/test_labels.csv" "$HOUSEHOLD" "$NREC" "$OWN_DATA" <<'PY'
 import sys
-res, lab, first, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+res, lab, first, nrec, own = (sys.argv[1], sys.argv[2], int(sys.argv[3]),
+                             int(sys.argv[4]), sys.argv[5] == "1")
 probs=[]
 for line in open(res):
     line=line.strip()
     if not line or line.startswith('#'): continue
     probs.append(float(line.split(',')[0]))
 truth=[]
-for line in open(lab):
+for line in ([] if own else open(lab)):
     line=line.strip()
     if not line or line.startswith('#'): continue
     try: truth.append(int(line.split(',')[1]))
     except ValueError: continue
 def row(k, p):
-    return ("ELIGIBLE" if p > 0.5 else "not eligible",
-            "eligible" if truth[k] else "not eligible")
+    ans = "ELIGIBLE" if p > 0.5 else "not eligible"
+    if own:
+        return ans, None
+    return ans, ("eligible" if truth[k] else "not eligible")
 if nrec == 1:
     p = probs[0]; ans, t = row(first, p)
-    print(f"household scored        : {first}")
+    print(f"{'your usage' if own else 'household scored':<24}: "
+          f"{'from your own input' if own else first}")
     print(f"eligibility probability : {p:.4f}")
     print(f"your answer             : {ans}")
-    print(f"measured truth for you  : {t}")
+    if t is not None:
+        print(f"measured truth for you  : {t}")
     print("decrypted with your own secret key; the server only ever held ciphertext")
 else:
-    print(f"{'household':>10} {'probability':>12} {'its answer':>15} {'measured truth':>16}")
+    hdr = f"{'row':>10} {'probability':>12} {'its answer':>15}"
+    print(hdr if own else hdr + f" {'measured truth':>16}")
     for j, p in enumerate(probs):
         ans, t = row(first + j, p)
-        print(f"{first+j:>10} {p:>12.4f} {ans:>15} {t:>16}")
+        line = f"{first+j:>10} {p:>12.4f} {ans:>15}"
+        print(line if t is None else line + f" {t:>16}")
     print("validation sweep: one key set covers these rows, so this is a test shape, "
           "not the deployment shape")
 PY
 
 echo "=== model quality (offline validation on the labeled development set) ==="
-python3 - "$TWIN" "$ROOT/data/test_labels.csv" <<'PY'
+python3 - "$ROOT/data/twin_outputs.csv" "$ROOT/data/test_labels.csv" <<'PY'
 import sys
 twin_path, lab_path = sys.argv[1], sys.argv[2]
 probs=[]
@@ -284,7 +347,8 @@ print(f"of truly eligible households: {100*rec:.1f}% are told so")
 PY
 
 # ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
-python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" "$HOUSEHOLD" <<'PY'
+TWIN_OFFSET="$HOUSEHOLD"; [ "$OWN_DATA" = 1 ] && TWIN_OFFSET=0
+python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" "$TWIN_OFFSET" <<'PY'
 import sys
 res, twin, tolf, nrec, first = (sys.argv[1], sys.argv[2], sys.argv[3],
                                 int(sys.argv[4]), int(sys.argv[5]))

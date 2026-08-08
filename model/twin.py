@@ -220,5 +220,26 @@ def main():
     print("\nwrote data/reference_outputs.csv, data/twin_outputs.csv, data/noise_tolerance.txt")
 
 
+def score_one(csv_path, row):
+    """Print the twin probability for one row of an arbitrary input file, so a run
+    against a user-supplied series still has something to check the encrypted
+    result against."""
+    names, R, meta = load_derivation()
+    m = load_model()
+    Y = load_inputs(csv_path)
+    if row >= len(Y):
+        raise SystemExit(f"row {row} not in {csv_path} (it has {len(Y)} rows)")
+    if Y.shape[1] != meta["series_len"]:
+        raise SystemExit(f"{csv_path} rows have {Y.shape[1]} values, "
+                         f"expected {meta['series_len']}")
+    z, _ = logit(Y[row:row + 1], names, R, m)
+    p = cheb_sigmoid_factory(m["sigmoid_lo"], m["sigmoid_hi"], m["sigmoid_degree"])(z)[0]
+    print(f"{p:.10f},{int(p > 0.5)}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 4 and sys.argv[1] == "--score":
+        score_one(sys.argv[2], int(sys.argv[3]))
+    else:
+        main()
