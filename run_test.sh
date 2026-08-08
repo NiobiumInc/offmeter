@@ -82,7 +82,7 @@ BUILD="$ROOT/build"
 INPUTS="$ROOT/data/test_inputs.csv"
 TWIN="$ROOT/data/twin_outputs.csv"
 TOL_FILE="$ROOT/data/noise_tolerance.txt"
-RUN="$ROOT/run_${MODE}"
+RUN="$ROOT/run_${MODE}"; [ "$SIMFULL" = 1 ] && RUN="$ROOT/run_sim-full"
 CLIENT="$RUN/client_home"
 SERVER="$RUN/server_home"
 # Minimum-ring-dimension check stays ON: it passes at N=2^16 and guards against an
