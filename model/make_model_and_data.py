@@ -11,19 +11,19 @@
 #
 # HOW THE GROUND TRUTH IS DEFINED (this is the point of the design):
 #   1. Draw a household's 24-hour kWh profile x (seeded).
-#   2. A fixed *latent* process decides who is genuinely a good demand-response
+#   2. A fixed *latent* process decides who is a good demand-response
 #      candidate. It keys off physically meaningful, NON-LINEAR summaries of the
 #      profile — the evening-peak SHARE (peak / total), the absolute shiftable
 #      evening load, the midday share, and overall size — producing a true
 #      probability p_true = sigmoid(true_score - offset). The offset is tuned for a
-#      documented base rate (~1/3 of households genuinely eligible), NOT 50/50.
+#      documented base rate (~1/3 of households eligible).
 #   3. The label y ~ Bernoulli(p_true). Labels carry real noise: even the latent
 #      process is not deterministic, so NO model can score 100%.
 #   4. We then FIT the utility's logistic model (its fixed shape: 24 hourly weights
 #      + a total-use weight + an evening-peak weight + bias) to predict y on a
 #      TRAIN split. Because the truth depends on ratios (nonlinear in x) and the
-#      labels are noisy, the fitted linear model is a genuine, imperfect predictor
-#      of an independent label — not the label's source.
+#      labels are noisy, the fitted linear model is an imperfect predictor
+#      of an independent label, not its source.
 #
 # The model still scores a household's 24-value hourly kWh profile PLUS two
 # aggregates the circuit derives from it:
@@ -69,7 +69,7 @@ def sigmoid(z):
 
 # ---- the independent latent "truth" -----------------------------------------
 def latent_score(x):
-    """A fixed latent process scoring genuine DR suitability from physical summaries
+    """A fixed latent process scoring DR suitability from physical summaries
     of the profile. Mixes signal a linear-in-x model CAN capture (absolute evening
     load) with signal it can only approximate (evening-peak SHARE, a nonlinear
     ratio), so the fitted logistic is a strong-but-imperfect predictor."""
@@ -141,7 +141,7 @@ def prf(y, pred):
     return prec, rec, f1
 
 # ---- generate data, fit, calibrate the in-circuit sigmoid --------------------
-BASE_RATE = 1.0 / 3.0                          # documented target: ~1/3 genuinely eligible
+BASE_RATE = 1.0 / 3.0                          # documented target: ~1/3 eligible
 Xtr = make_profiles(6000)
 Xte = make_profiles(400)
 offset = calibrate_offset(Xtr, BASE_RATE)

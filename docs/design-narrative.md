@@ -25,7 +25,7 @@ arithmetic on real numbers).
 - **Parties.** A *household* (the client / data owner / decryptor) and the
   *utility* (the server / compute party). The household holds a private 24-value
   hourly kWh profile. The utility holds the model (weights, bias, the two
-  aggregation windows). The problem states these are fixed and known to the
+  aggregation windows). These are fixed and known to the
   utility, i.e. **not secret**, so they are plaintext operands.
 - **Adversary.** A semi-honest utility: it runs the computation correctly but
   may try to learn the household's consumption. The profile, the two
@@ -194,4 +194,3 @@ in `results-report.md`; the protocol and threat model in
 - Default (Fog) mode never silently falls back to the local simulator: with no
   API key it prints the sign-in pointer; with a key but not launched under
   `fog submit` it prints how to dispatch. Local validation is `--sim` / `--cpu`.
-  A live Fog submission was **not** performed (out of scope for this build).

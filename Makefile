@@ -7,18 +7,13 @@
 help:
 	@echo "Targets:"
 	@echo "  make install-skill   fetch the fhe-application-design skill from GitHub into the"
-	@echo "                       repo-root .claude/skills/ and .agents/skills/ (shared by all apps)"
+	@echo "                       the repo's .claude/skills/ and .agents/skills/"
 	@echo "  make build           configure + build the four programs (keygen/encrypt/server/decrypt); run in-container"
 	@echo "  make clean           remove the build tree and all per-run artifacts"
 	@echo "  run: ./run-in-container.sh \"./run_test.sh ...\"   (see ./run_test.sh --help)"
 
-# Install the fhe-application-design skill from GitHub into BOTH .claude/skills/
-# and .agents/skills/ (Claude Code and the open agent-skills layout), so this is
-# not a Claude-only setup. A SINGLE install lives at the repository root and is
-# shared by every app, so running this target from inside an app still installs
-# it at the root (SKILL_ROOT resolves to the git top level, falling back to ..).
-# The skill bundles the Docker build context under environment/. Both directories
-# are gitignored.
+# Install the fhe-application-design skill from GitHub into both .claude/skills
+# and .agents/skills/. The skill bundles the Docker build context under environment/.
 SKILL_REPO ?= https://github.com/NiobiumInc/niobium-skills
 SKILL_NAME ?= fhe-application-design
 SKILL_ROOT ?= $(shell git rev-parse --show-toplevel 2>/dev/null || echo ..)

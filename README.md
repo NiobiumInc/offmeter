@@ -88,8 +88,8 @@ Measured on a laptop CPU, scoring one household:
 | Accuracy cost of the encryption | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
 | Model quality (labeled synthetic test set) | **accuracy ≈ 0.77, ROC-AUC ≈ 0.80** at a ~37%-eligible base rate |
 
-**Model quality, and an honest caveat.** The model here is genuinely *fitted*, and
-its quality is genuinely measured. Each synthetic household carries an
+**Model quality.** The model is *fitted*, and its quality is measured. Each
+synthetic household carries an
 **independent** eligibility label drawn from a fixed latent process (base rate
 **~37% eligible**, an uneven split by construction), and the utility's logistic model is
 trained to predict that label. On a held-out 400-household test set the fitted
@@ -110,8 +110,7 @@ installed locally. Everything runs inside one image.
 **Set up (one time):** install the skill, get the container, then build the app.
 
 **1. Install the skill.** Fetch the `fhe-application-design` skill from GitHub into the
-repository-root `.claude/skills/` and `.agents/skills/` (both gitignored). A single
-install at the repo root is shared by every app here, so this works from inside the app too:
+repo's `.claude/skills/` and `.agents/skills/` (both gitignored):
 
 ```bash
 make install-skill
@@ -131,9 +130,9 @@ git clone https://github.com/NiobiumInc/niobium-skills
 docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
   niobium-skills/skills/fhe-application-design/environment
 
-# Or build it (b) from the skill installed in step 1 (shared at the repo root):
+# Or build it (b) from the skill installed in step 1:
 docker build -t ghcr.io/niobiuminc/fhe-dev:v0.13.0 \
-  ../.claude/skills/fhe-application-design/environment
+  .claude/skills/fhe-application-design/environment
 ```
 
 **3. Build the app's four programs** (key generation, encrypt, score, decrypt):
@@ -154,11 +153,11 @@ committed), so a fresh clone must produce them once before the first run:
 
 The model and datasets (`model/model.txt`, `data/test_inputs.csv`, `data/test_labels.csv`)
 are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run; only
-`twin.py` above. (`make clean` leaves `data/` untouched, so this step is genuinely one-time
+`twin.py` above. (`make clean` leaves `data/` untouched, so this step is one-time
 unless you delete the ledgers or change the model.)
 
-**1. Run it on the Niobium Fog.** The Fog is the accelerated platform these apps
-run on, and it's the default; a bare run targets it:
+**1. Run it on the Niobium Fog.** The Fog is the accelerated platform this app
+runs on, and it's the default; a bare run targets it:
 
 ```bash
 ./run-in-container.sh "./run_test.sh"

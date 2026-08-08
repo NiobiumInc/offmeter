@@ -19,8 +19,8 @@ input, so it is safe to place on untrusted infrastructure.
    the relinearization key, and rotation keys {1,2,4,8,16}.
 2. Client ships to the server, once: crypto context + public key + evaluation
    keys (~337 MB total). The **secret key never leaves the client.**
-3. The server also holds the model (`model.txt`), public per the problem
-   statement (weights and aggregation windows are known to the utility).
+3. The server also holds the model (`model.txt`), which is public by design:
+   the weights and aggregation windows are known to the utility.
 
 **Per request:**
 

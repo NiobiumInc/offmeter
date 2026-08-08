@@ -22,12 +22,12 @@ the ideal model (max 3e-3 in probability, and it flips no decisions). Second, a
 faint hiss of CKKS encryption noise on top, measured at ~2–4e-7, a further four
 orders of magnitude smaller.
 
-**(d) Why it isn't a lucky run.** The same answer is reproduced at every
+**(d) Consistent across layers.** The same answer is reproduced at every
 verification layer: the plaintext faithful twin, the ring-level FHETCH simulator
 (which is **bit-identical** to the OpenFHE computation), and the encrypted CPU
 run. Each agrees with the others.
 
-**(e) The honest caveat.** These results measure *fidelity to the model* (that
+**(e) Scope of these results.** These results measure *fidelity to the model* (that
 the encrypted pipeline computes what the utility's model says). They do **not**
 measure the real-world quality of the model itself. The households and the model here are
 seeded synthetic, built to exercise the pipeline; predictive quality on real

@@ -195,7 +195,7 @@ done
 
 # ---- 5. application quality (LEAD: real accuracy/AUC vs the TRUE labels) ----
 # The model is FITTED to an independent Bernoulli-sampled label with a documented
-# base rate, so its quality is genuinely measurable. These are the fitted model's
+# base rate, so its quality is measurable. These are the fitted model's
 # predictions vs the TRUE labels over the full labeled test set. The per-household
 # prediction is exactly the function the encrypted circuit evaluates (the faithful
 # twin); the encrypted run reproduces it to ~1e-7 — certified on the sampled
