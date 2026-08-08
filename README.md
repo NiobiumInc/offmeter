@@ -147,13 +147,23 @@ your own machine and check it against the plain result:
 
 ### Two ways to run it
 
-**Score one household, the way the application actually works.** This is the
-default. One household encrypts its own 28-day meter history, the utility scores
-it blind, and that household decrypts a single answer that nobody else can read:
+Both use the four execution targets above. They differ in how many households are
+scored.
+
+#### Way 1: score one household, which is how the application works
+
+The default. One household encrypts its own 28-day meter history, the utility
+scores it blind, and that household decrypts a single answer nobody else can read.
 
 ```bash
-./run-in-container.sh "./run_test.sh --cpu"                # household 0
-./run-in-container.sh "HOUSEHOLD=1 ./run_test.sh --cpu"    # pick another one
+./run-in-container.sh "./run_test.sh --cpu"
+```
+
+`HOUSEHOLD` picks which row of `data/test_inputs.csv` to score, 0 to 399,
+defaulting to 0:
+
+```bash
+./run-in-container.sh "HOUSEHOLD=1 ./run_test.sh --cpu"
 ```
 
 ```
@@ -165,27 +175,36 @@ measured truth for you  : eligible
 decrypted with your own secret key; the server only ever held ciphertext
 ```
 
-`HOUSEHOLD` is a row of `data/test_inputs.csv`, 0 to 399. Takes about 25 seconds.
-The answer is not always right: household 42, for instance, scores 0.6366 and is
-told ELIGIBLE while its measured truth is not eligible. How often that happens is
-what the quality figures below the result are for.
+About 25 seconds. The answer is not always right: household 42 scores 0.6366 and
+is told ELIGIBLE while its measured truth is not eligible. How often that happens
+is what the quality figures below the result are for.
 
-**Check the model across many households (validation sweep).** Scoring one
-household proves the pipeline; it says little about whether the model is any good.
-`NREC` scores that many consecutive households so the encrypted-vs-twin gate has
-more samples:
+#### Way 2: score several households, to sample the encryption more widely
+
+One household proves the pipeline end to end. `NREC` scores that many
+**consecutive** households starting at `HOUSEHOLD`, which gives the
+encrypted-vs-twin fidelity gate more than one sample:
 
 ```bash
-./run-in-container.sh "NREC=6 ./run_test.sh --cpu"
+./run-in-container.sh "NREC=6 ./run_test.sh --cpu"                # households 0-5
+./run-in-container.sh "HOUSEHOLD=100 NREC=6 ./run_test.sh --cpu"  # households 100-105
 ```
 
-The sweep reuses one key set across those rows to stay fast, and labels itself as
-doing so. A deployment gives each household keys of its own, which is what the
-default single-household run shows.
+There is no sweep-everything option, and you do not need one. The model-quality
+figures printed after every run **already cover all 400 households**, because they
+are computed in the clear from `model/twin.py`. `NREC` only adds encrypted samples
+to the fidelity gate, where a handful is plenty; encrypting all 400 would take
+about 85 minutes and tell you nothing extra. Six households take about 90 seconds.
 
-Both modes print, after the result, the model's **quality against the measured
+The sweep reuses one key set across its rows to stay fast, and labels itself as
+doing so in the output. Way 1 is the shape a deployment has, where each household
+holds keys of its own.
+
+### What every run prints
+
+After the result, each run prints the model's **quality against the measured
 labels** (base rate, ROC-AUC, and how often an ELIGIBLE answer is correct),
-computed in the clear over the full 400-household labeled set. Then comes the
+computed in the clear over the full 400-household labeled set. Then the
 encryption-fidelity PASS/FAIL gate (encrypted run vs the faithful twin), the
 timings and data sizes above, and a check that a household's secret key never
 reaches the server (it refuses to start if it finds one).
@@ -196,6 +215,14 @@ between them:
 
 ```bash
 ./run-in-container.sh "python3 harness/demo_two_process.py"
+```
+
+This scores **one household** (household 0), like Way 1 above. `DEMO_HOUSEHOLD`
+picks a different one and `DEMO_NREC` scores several in a row:
+
+```bash
+./run-in-container.sh "DEMO_HOUSEHOLD=1 python3 harness/demo_two_process.py"
+./run-in-container.sh "DEMO_NREC=3 python3 harness/demo_two_process.py"
 ```
 
 This stands the household **client** and the untrusted utility/compute **provider**

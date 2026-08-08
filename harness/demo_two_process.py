@@ -26,7 +26,12 @@ the wire. Point the client at a remote host with SERVER_URL=http://host:port —
 the server home is safe to copy to an untrusted machine as-is.
 
 Usage (inside the container):  python3 harness/demo_two_process.py
-Env: DEMO_PORT (default 8471), SERVER_URL, DEMO_NREC (households to score, default 3).
+Scores ONE household by default, the way the protocol works. DEMO_HOUSEHOLD picks
+which; DEMO_NREC>1 scores that many in a row under the one key set, for a quicker
+look at several results.
+
+Env: DEMO_PORT (default 8471), SERVER_URL, DEMO_HOUSEHOLD (default 0), DEMO_NREC
+(default 1).
 """
 
 import http.server
@@ -47,7 +52,8 @@ INPUTS = os.path.join(ROOT, "data", "test_inputs.csv")
 TWIN = os.path.join(ROOT, "data", "twin_outputs.csv")
 PORT = int(os.environ.get("DEMO_PORT", "8471"))
 SERVER_URL = os.environ.get("SERVER_URL", f"http://127.0.0.1:{PORT}")
-NREC = int(os.environ.get("DEMO_NREC", "3"))  # households to score in the demo
+HOUSEHOLD = int(os.environ.get("DEMO_HOUSEHOLD", "0"))  # which household to score
+NREC = int(os.environ.get("DEMO_NREC", "1"))           # >1 scores that many in a row
 
 # The crypto context + public/eval keys + public model the utility needs. These
 # are exactly what run_test.sh provisions into the server home (never sk.bin).
@@ -174,7 +180,7 @@ def client_flow():
     put("model.txt", os.path.join(ROOT, "model", "model.txt"))
 
     probs = []
-    for i in range(NREC):
+    for i in range(HOUSEHOLD, HOUSEHOLD + NREC):
         print(f"[client] encrypting household row {i} (28-day hourly kWh series)")
         ct = os.path.join(CLIENT, f"ct_x_{i}.bin")
         run([os.path.join(BUILD, "dr_encrypt"), CLIENT, INPUTS, str(i), ct],
@@ -194,7 +200,7 @@ def client_flow():
             cwd=CLIENT)
         probs.append(read_prob(prob_txt))
 
-    twin = load_twin(NREC)
+    twin = load_twin(HOUSEHOLD + NREC)[HOUSEHOLD:HOUSEHOLD + NREC]
     n = min(len(probs), len(twin))
     worst = max(abs(p - t) for p, t in zip(probs[:n], twin[:n])) if n else 0.0
     print(f"[client] eligibility probabilities: "
