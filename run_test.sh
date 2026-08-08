@@ -26,6 +26,7 @@ run_test.sh — demand-response eligibility pipeline
   keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
 
 Usage: ./run_test.sh [--cpu | --sim | --sim-full | -h]
+  Scores ONE household (HOUSEHOLD=<row>, default 0) and returns one result.
   (no flag)   dispatch to the Niobium Fog (default; needs an API key). Records
               hollow (fast); the Fog reconstructs the real values on replay.
   --cpu       plain-OpenFHE local validation on your CPU
@@ -41,7 +42,10 @@ Env:
               set FOG_TARGET=FUNC_SIM for the hardware-free functional simulator)
   RINGCHK     set to --no-ring-dim-check to bypass the minimum-ring-dim security floor
               (unnecessary at N=2^16; opt in only for a deliberately small ring)
-  NREC        records to score (default: cpu=6, sim=3, fog=2)
+  HOUSEHOLD   which household (row of data/test_inputs.csv) to score (default: 0)
+  NREC        validation-sweep size (default: 1). The protocol scores one household
+              per request; NREC>1 scores that many consecutive households to give the
+              FHE-vs-twin gate more samples, each with its own freshly generated keys.
 
 Run everything through ./run-in-container.sh. Fog access: `fog login`, or request an
 account at https://console.niobium.co/request-account.
@@ -69,13 +73,11 @@ case "$MODE" in
   sim) [ "$SIMFULL" = 1 ] || HOLLOW_FLAG="--hollow";;
 esac
 
-# fewer records for the trace paths: each is far heavier per record than plain CPU
-# (local fhetch_sim replay under --sim; a provisioned Fog job per household under fog).
-case "$MODE" in
-  cpu) NREC="${NREC:-6}";;
-  sim) NREC="${NREC:-3}";;
-  fog) NREC="${NREC:-2}";;
-esac
+# The protocol scores ONE household per request, so that is the default. HOUSEHOLD
+# picks which row of the input file to score. NREC>1 runs a validation sweep of
+# consecutive households, each with its OWN freshly generated key set.
+HOUSEHOLD="${HOUSEHOLD:-0}"
+NREC="${NREC:-1}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
@@ -110,7 +112,12 @@ for f in "$TWIN" "$TOL_FILE"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — generate the twin ledgers first: python3 model/twin.py"; exit 1; }
 done
 
-echo "############ demand-response run_test ($MODE, NREC=$NREC) ############"
+if [ "$NREC" -eq 1 ]; then
+  echo "############ demand-response run_test ($MODE, household $HOUSEHOLD) ############"
+else
+  echo "############ demand-response run_test ($MODE, validation sweep: households $HOUSEHOLD..$((HOUSEHOLD+NREC-1))) ############"
+  echo "sweep shortcut: these households share one key set so the sweep stays fast"
+fi
 
 # ---- 1. keygen (client home only) -----------------------------------------
 t0=$(date +%s.%N)
@@ -156,7 +163,8 @@ srv_secs=0; peak_rss_kb=0
 CTX_BYTES=0; CT_IN_BYTES=0; CT_OUT_BYTES=0
 KEY_BYTES=$(du -cb "$SERVER/cc.bin" "$SERVER/mk.bin" "$SERVER/rk.bin" "$SERVER/pk.bin" | tail -1 | cut -f1)
 
-for ((i=0; i<NREC; i++)); do
+for ((j=0; j<NREC; j++)); do
+  i=$((HOUSEHOLD + j))
   "$BUILD/dr_encrypt" "$CLIENT" "$INPUTS" "$i" "$CLIENT/ct_x_$i.bin" >/dev/null
   cp "$CLIENT/ct_x_$i.bin" "$SERVER/ct_x.bin"           # only ciphertext crosses
   CT_IN_BYTES=$(stat -c%s "$SERVER/ct_x.bin")
@@ -202,10 +210,10 @@ done
 # household can read. So the run leads with the per-household result, and the
 # population figures below are offline model validation on a labeled set.
 echo
-echo "=== what each household learned (this run) ==="
-python3 - "$RESULTS" "$ROOT/data/test_labels.csv" <<'PY'
+if [ "$NREC" -eq 1 ]; then echo "=== your result ==="; else echo "=== results (validation sweep) ==="; fi
+python3 - "$RESULTS" "$ROOT/data/test_labels.csv" "$HOUSEHOLD" "$NREC" <<'PY'
 import sys
-res, lab = sys.argv[1], sys.argv[2]
+res, lab, first, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 probs=[]
 for line in open(res):
     line=line.strip()
@@ -217,15 +225,25 @@ for line in open(lab):
     if not line or line.startswith('#'): continue
     try: truth.append(int(line.split(',')[1]))
     except ValueError: continue
-print(f"{'household':>10} {'probability':>12} {'its answer':>15} {'measured truth':>16}")
-for i, p in enumerate(probs):
-    ans = "ELIGIBLE" if p > 0.5 else "not eligible"
-    t = "eligible" if truth[i] else "not eligible"
-    print(f"{i:>10} {p:>12.4f} {ans:>15} {t:>16}")
-print("each decrypted with that household's own secret key; the server saw none of it")
+def row(k, p):
+    return ("ELIGIBLE" if p > 0.5 else "not eligible",
+            "eligible" if truth[k] else "not eligible")
+if nrec == 1:
+    p = probs[0]; ans, t = row(first, p)
+    print(f"household scored        : {first}")
+    print(f"eligibility probability : {p:.4f}")
+    print(f"your answer             : {ans}")
+    print(f"measured truth for you  : {t}")
+    print("decrypted with your own secret key; the server only ever held ciphertext")
+else:
+    print(f"{'household':>10} {'probability':>12} {'its answer':>15} {'measured truth':>16}")
+    for j, p in enumerate(probs):
+        ans, t = row(first + j, p)
+        print(f"{first+j:>10} {p:>12.4f} {ans:>15} {t:>16}")
+    print("validation sweep: one key set covers these rows, so this is a test shape, "
+          "not the deployment shape")
 PY
 
-echo
 echo "=== model quality (offline validation on the labeled development set) ==="
 python3 - "$TWIN" "$ROOT/data/test_labels.csv" <<'PY'
 import sys
@@ -266,18 +284,19 @@ print(f"of truly eligible households: {100*rec:.1f}% are told so")
 PY
 
 # ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
-python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" <<'PY'
+python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" "$HOUSEHOLD" <<'PY'
 import sys
-res, twin, tolf, nrec = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-def probs(path, n):
+res, twin, tolf, nrec, first = (sys.argv[1], sys.argv[2], sys.argv[3],
+                                int(sys.argv[4]), int(sys.argv[5]))
+def probs(path):
     out=[]
     for line in open(path):
         line=line.strip()
         if not line or line.startswith('#'): continue
         out.append(float(line.split(',')[0]))
-        if len(out)>=n: break
     return out
-dec=probs(res, nrec); tw=probs(twin, nrec)
+dec=probs(res)[:nrec]
+tw=probs(twin)[first:first+nrec]        # the SAME households the run scored
 tol=float(open(tolf).read().strip())
 errs=[abs(d-t) for d,t in zip(dec,tw)]
 flips=sum(1 for d,t in zip(dec,tw) if (d>0.5)!=(t>0.5))
