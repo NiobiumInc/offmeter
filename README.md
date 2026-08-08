@@ -115,7 +115,7 @@ committed), so a fresh clone must produce them once before the first run:
 
 The model files and datasets (`model/model.txt`, `model/derivation.txt`,
 `data/test_inputs.csv`, `data/test_labels.csv`)
-are **committed**, so `model/make_model_and_data.py` does *not* need to be re-run; only
+are **committed**, so `model/make_model_and_data.py` does _not_ need to be re-run; only
 `twin.py` above. (`make clean` leaves `data/` untouched, so this step is one-time
 unless you delete the ledgers or change the model.)
 
@@ -143,7 +143,7 @@ your own machine and check it against the plain result:
   the quickest correctness check.
 - **`--sim`** records the (hollow) trace the Fog would execute and replays it through a
   local simulator (`fhetch_sim`), then twin-compares the result, so you exercise the
-  *Fog code path* offline. It's the closest thing to a Fog run without an account.
+  _Fog code path_ offline. It's the closest thing to a Fog run without an account.
 - **`--sim-full`** is `--sim` but records real math instead of hollow, adding a
   bit-exact ring-level check that the replayed trace matches the plain OpenFHE run;
   run it alongside `--sim` to surface any hollow-recording divergence: the thorough
@@ -279,8 +279,8 @@ different one.
 separate 3,000-household training split (`data/train_inputs.csv` ships the first
 100 of that split as a representative sample). Each household is described by its
 private **28-day hourly consumption series** of 672 kWh values. The pipeline
-outputs an **eligibility probability** (sigmoid), thresholded at 0.5 → *eligible /
-not eligible*.
+outputs an **eligibility probability** (sigmoid), thresholded at 0.5 → _eligible /
+not eligible_.
 
 **The label is a measured load impact.** A demand-response event is simulated on a
 hot weekday; the household's Customer Baseline Load is computed **10-in-10 style**
@@ -292,8 +292,8 @@ to simulated behaviour.
 
 **Per-household input (encrypted and sent to the utility):**
 
-| Feature | Description | Count |
-|---|---|---|
+| Feature         | Description                                          | Count      |
+| --------------- | ---------------------------------------------------- | ---------- |
 | `y[0] … y[671]` | Hourly electricity consumption (kWh), 28 days × 24 h | 672 values |
 
 **Six quantities the circuit derives** from those same 672 values (not extra
@@ -301,14 +301,14 @@ inputs). The derivation is the CalTRACK/TOWT model form; because its regressors
 are the calendar and public weather, each quantity is a public linear functional
 of your encrypted series:
 
-| Derived value | Definition |
-|---|---|
-| `cbl_peak` | 10-in-10 Customer Baseline Load for the 5–9pm event window |
-| `cool_slope_hi` | TOWT coefficient on the 75–90 °F cooling term (the AC-load proxy) |
-| `peak_towt_design` | TOWT-predicted event-window load at the 95 °F design condition |
-| `daily_mean` | Overall level (mean hourly kWh across the baseline) |
-| `midday_mean` | Daytime-occupancy proxy; daytime-heavy users shed less |
-| `weekend_evening_delta` | Weekend minus weekday evening load |
+| Derived value           | Definition                                                        |
+| ----------------------- | ----------------------------------------------------------------- |
+| `cbl_peak`              | 10-in-10 Customer Baseline Load for the 5–9pm event window        |
+| `cool_slope_hi`         | TOWT coefficient on the 75–90 °F cooling term (the AC-load proxy) |
+| `peak_towt_design`      | TOWT-predicted event-window load at the 95 °F design condition    |
+| `daily_mean`            | Overall level (mean hourly kWh across the baseline)               |
+| `midday_mean`           | Daytime-occupancy proxy; daytime-heavy users shed less            |
+| `weekend_evening_delta` | Weekend minus weekday evening load                                |
 
 The **confidential** model is a ridge logistic regression over those six
 quantities. Its weights live only on the utility's server (`model/model.txt`,
@@ -320,14 +320,14 @@ committed here only so the demo runs); the public derivation is separate
 
 Measured on a laptop CPU, scoring one household:
 
-| | |
-|---|---|
-| Time to score one encrypted household | **~13 seconds** |
-| Memory on the utility's side | **~0.9 GB** |
-| Data per request | **13 MB** up, **7 MB** back |
-| One-time key setup (per household) | **607 MB** |
-| Accuracy cost of the encryption | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
-| Model quality (measured labels, synthetic households) | **ROC-AUC 0.839**; recruiting the top 20% hits **60% eligible** vs 26.8% at random |
+|                                                       |                                                                                                          |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Time to score one encrypted household                 | **~13 seconds**                                                                                          |
+| Memory on the utility's side                          | **~0.9 GB**                                                                                              |
+| Data per request                                      | **13 MB** up, **7 MB** back                                                                              |
+| One-time key setup (per household)                    | **607 MB**                                                                                               |
+| Accuracy cost of the encryption                       | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
+| Model quality (measured labels, synthetic households) | **ROC-AUC 0.839**; recruiting the top 20% hits **60% eligible** vs 26.8% at random                       |
 
 **Model quality, and the operating point it is quoted at.** A utility does not
 apply a probability cut to a targeting score. It ranks households and recruits
@@ -338,7 +338,7 @@ the **top 20% by score**.
 Why that depth:
 
 - **Decile ranking is the reporting convention** for propensity and targeting
-  models, and *top-decile lift* is the standard published benchmark. Reported
+  models, and _top-decile lift_ is the standard published benchmark. Reported
   values in customer-targeting work generally fall between **2.0× and 3.5×**, with
   ~2.0× a common average ([decile
   analysis](https://www.kdnuggets.com/2021/07/lost-art-decile-analysis.html),
@@ -350,12 +350,12 @@ Why that depth:
 
 At that operating point, on the 400 held-out households:
 
-| | Model | Recruiting at random |
-|---|---|---|
-| Households recruited | 80 of 400 | 80 of 400 |
-| Precision (hit rate) | **0.600** | 0.268 |
-| Lift over random | **2.24×** | 1.00× |
-| Eligibles captured | **44.9%** (48 of 107) | 20% |
+|                      | Model                 | Recruiting at random |
+| -------------------- | --------------------- | -------------------- |
+| Households recruited | 80 of 400             | 80 of 400            |
+| Precision (hit rate) | **0.600**             | 0.268                |
+| Lift over random     | **2.24×**             | 1.00×                |
+| Eligibles captured   | **44.9%** (48 of 107) | 20%                  |
 
 Ranking quality independent of any depth is **ROC-AUC 0.839**.
 
@@ -364,13 +364,13 @@ budget can read its own operating point off the table.
 
 **Read against the achievable ceiling.** Event response is driven by a household's
 willingness to curtail, which never appears in metered load, so meter data caps how
-well any model can predict it. A model given perfect knowledge of every *physical*
+well any model can predict it. A model given perfect knowledge of every _physical_
 household parameter, while still blind to willingness, also scores **AUC 0.839**.
 The six derived quantities therefore extract essentially **everything extractable**
 from the baseline period, and the remaining gap is behavioural.
 
 The households and weather are **synthetic** (fixed seed), so this demonstrates
-the private-scoring *pipeline* on a synthetic domain. The model form is the
+the private-scoring _pipeline_ on a synthetic domain. The model form is the
 CalTRACK/TOWT specification used in regulated settlement, so a utility would swap
 in real AMI data and its own weights while keeping the structure.
 
@@ -402,7 +402,7 @@ encrypted output against the twin, so:
 > **total error = approximation cost** (twin vs reference) **+ encryption cost**
 > (encrypted vs twin, typically ~1e-7).
 
-If the twin already disagreed with the reference, that would be a *modeling*
+If the twin already disagreed with the reference, that would be a _modeling_
 limitation rather than an encryption one, and this is where you'd catch it.
 
 ## Under the hood
