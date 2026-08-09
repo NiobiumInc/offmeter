@@ -44,6 +44,19 @@ static void print_fog_pointer() {
       "  • No account yet? Validate locally instead:   dr_server <home> --sim\n" << std::endl;
 }
 
+// Drop the unused RNS towers from the result before it goes back to the client.
+// A ciphertext costs 2*N*8 bytes per tower (1 MiB here at N=2^16), and the towers
+// left after the circuit are unspent multiplicative budget that only decryption
+// still needs. One tower suffices because the result is sigmoid(...), always in
+// (0,1). Applied INSIDE the recorded region so the Fog computes and returns the
+// compressed ciphertext rather than the full one: 7 MiB -> 1 MiB on the wire.
+static constexpr uint32_t kResultTowers = 1;
+
+static Ciphertext<DCRTPoly> compress_result(const CryptoContext<DCRTPoly>& cc,
+                                            const Ciphertext<DCRTPoly>& ct) {
+    return cc->Compress(ct, kResultTowers);
+}
+
 int main(int argc, char* argv[]) {
     // ---- parse our own flags (leave the rest for compiler().init) ----------
     Mode mode = Mode::FOG;
@@ -116,7 +129,7 @@ int main(int argc, char* argv[]) {
 
     // ---- CPU path: plain OpenFHE ------------------------------------------
     if (mode == Mode::CPU) {
-        auto prob = run_circuit(cc, model, pts, ct_x);
+        auto prob = compress_result(cc, run_circuit(cc, model, pts, ct_x));
         if (!Serial::SerializeToFile(home + "/ct_result.bin", prob, SerType::BINARY))
             throw std::runtime_error("serialize result failed");
         std::cout << "returned " << fs::file_size(home + "/ct_result.bin")
@@ -162,7 +175,7 @@ int main(int argc, char* argv[]) {
     if (!niobium::compiler().is_cache_valid()) {
         auto t_rec0 = std::chrono::steady_clock::now();
         niobium::compiler().start();
-        auto prob = run_circuit(cc, model, pts, ct_x);
+        auto prob = compress_result(cc, run_circuit(cc, model, pts, ct_x));
         niobium::compiler().probe("prob", prob);
         niobium::compiler().stop();
         auto t_rec1 = std::chrono::steady_clock::now();
