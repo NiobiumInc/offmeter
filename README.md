@@ -363,7 +363,7 @@ Measured on a laptop CPU, scoring one household:
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Time to score one encrypted household                 | **~13 seconds**                                                                                          |
 | Memory on the utility's side                          | **~0.9 GB**                                                                                              |
-| Data per request                                      | **13 MB** up, **7 MB** back                                                                              |
+| Data per request                                      | **13 MB** up, **1 MB** back                                                                              |
 | One-time key setup (per household)                    | **607 MB**                                                                                               |
 | Accuracy cost of the encryption                       | **negligible**: the encrypted answer matches the ordinary (unencrypted) computation to ~7 decimal places |
 | Model quality (measured labels, synthetic households) | **ROC-AUC 0.839**; recruiting the top 20% hits **60% eligible** vs 26.8% at random                       |

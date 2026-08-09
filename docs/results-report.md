@@ -123,10 +123,11 @@ The margin comes from matching the Chebyshev domain to the measured operand rang
 | Peak server RSS | ~888 MB (`--cpu`), ~2.13 GB (`--sim` / `--sim-full`, includes local replay) | getrusage(RUSAGE_CHILDREN) |
 | Setup keys (cc+mk+rk+pk) | 607.0 MB | client→server, once per session; ten rotation keys for the 1024-slot window dominate |
 | Input ciphertext / request | 13.00 MB | client→server; matches 2·N·13·8 ≈ 13.6 MB |
-| Output ciphertext / request | 7.00 MB | server→client; ~7 limbs after ~6 levels consumed |
+| Output ciphertext / request | 1.00 MB | server→client; `Compress` drops the unused RNS towers in-circuit, so the Fog returns one limb instead of seven |
 
 **Size-estimate cross-check (Stage 6 formula 2·N·(L+1)·8):** input at 13 limbs →
-13.6 MB (measured 13 MB ✓); output at ~7 limbs → 7.3 MB (measured 7 MB ✓).
+13.6 MB (measured 13 MB ✓); the output is compressed to one limb → 1.0 MB
+(measured 1 MB ✓).
 
 ## run_test default behavior (Fog)
 

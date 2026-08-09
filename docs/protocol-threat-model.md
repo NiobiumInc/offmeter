@@ -42,7 +42,8 @@ input, so it is safe to place on untrusted infrastructure.
 4. Client → server: one input ciphertext (13 MB) holding the encrypted 672-hour
    consumption series in slots 0..671.
 5. Server computes the circuit under encryption (aggregates + linear model +
-   sigmoid) and returns one output ciphertext (~7 MB), still encrypted.
+   sigmoid), compresses it to a single RNS tower, and returns one output
+   ciphertext (1 MB), still encrypted.
 6. Client decrypts slot 0, obtains the eligibility probability, thresholds at
    0.5.
 
