@@ -2,44 +2,64 @@
 #
 # Stages 3/5/6/7: the reference and the faithful twin, plus validation.
 #
-#   reference(x): logit = w.[x, total, peak] + bias ; prob = true sigmoid(logit)
-#   twin(x)     : SAME logit ; prob = Chebyshev-interpolant sigmoid over
-#                 [sigmoid_lo, sigmoid_hi] at sigmoid_degree -- the EXACT function
-#                 the encrypted circuit evaluates via OpenFHE EvalLogistic.
+#   reference(y) : feature_j = row_j . y   (the PUBLIC CalTRACK/TOWT derivation)
+#                  logit = w . features + bias      (the CONFIDENTIAL model)
+#                  prob  = true sigmoid(logit)
+#   twin(y)      : SAME derivation, SAME logit; prob = Chebyshev interpolant of
+#                  the logistic over [sigmoid_lo, sigmoid_hi] at sigmoid_degree --
+#                  the EXACT function the encrypted circuit evaluates via
+#                  OpenFHE EvalLogistic.
 #
-# The model is FITTED (see make_model_and_data.py) to independent Bernoulli labels,
-# so alongside the twin-vs-reference (polynomial) cost this script also reports the
-# fitted model's genuine quality against those true labels.
+# Reference and twin share identical linear algebra and differ ONLY in the
+# sigmoid, so twin-vs-reference isolates the polynomial-approximation cost.
 #
-# The aggregates (total_daily, evening_peak) are computed here the same way the
-# encrypted circuit computes them: a sum over the 24 slots, and a masked sum over
-# the evening-peak slots. Both reference and twin use identical linear algebra;
-# they differ ONLY in the sigmoid (true vs polynomial), so twin-vs-reference
-# isolates the polynomial-approximation cost.
+# The six derived quantities are computed here exactly as the encrypted circuit
+# computes them: multiply the 672-slot series by each row vector and sum the
+# slots (rotate-and-sum in the circuit, a dot product here).
 import numpy as np, os
 from numpy.polynomial import chebyshev as C
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-def load_model():
+
+def load_derivation(path=None):
+    path = path or os.path.join(HERE, "derivation.txt")
+    names, rows, meta = [], [], {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if parts[0] == "row":
+                names.append(parts[1])
+                rows.append([float(v) for v in parts[2:]])
+            else:
+                meta[parts[0]] = int(parts[1])
+    return names, np.array(rows), meta
+
+
+def load_model(path=None):
+    path = path or os.path.join(HERE, "model.txt")
     m = {}
-    with open(os.path.join(HERE, "model.txt")) as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
             k = parts[0]
-            if k == "w_hourly":
+            if k == "features":
+                m[k] = parts[1:]
+            elif k == "w":
                 m[k] = np.array([float(v) for v in parts[1:]])
-            elif k == "peak_hours":
-                m[k] = [int(v) for v in parts[1:]]
             elif k == "sigmoid_degree":
                 m[k] = int(parts[1])
             else:
                 m[k] = float(parts[1])
     return m
+
 
 def load_inputs(path):
     rows = []
@@ -50,6 +70,7 @@ def load_inputs(path):
                 continue
             rows.append([float(v) for v in line.split(",")])
     return np.array(rows)
+
 
 def load_labels(path):
     y = []
@@ -64,13 +85,18 @@ def load_labels(path):
                 continue
     return np.array(y)
 
+
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 
-def logit(X, m):
-    total = X[:, :24].sum(axis=1)
-    peak = X[:, m["peak_hours"]].sum(axis=1)
-    return X @ m["w_hourly"] + m["w_total"] * total + m["w_peak"] * peak + m["bias"]
+
+def logit(Y, names, R, m):
+    """features = Y @ R.T in the derivation's row order, then the confidential
+    linear layer. Row order is matched to the model's feature order by NAME."""
+    idx = [names.index(f) for f in m["features"]]
+    F = Y @ R[idx].T
+    return F @ m["w"] + m["bias"], F
+
 
 def cheb_sigmoid_factory(lo, hi, deg):
     coeffs = C.chebinterpolate(lambda t: sigmoid(0.5 * (hi - lo) * t + 0.5 * (hi + lo)), deg)
@@ -79,75 +105,108 @@ def cheb_sigmoid_factory(lo, hi, deg):
         return C.chebval(t, coeffs)
     return f
 
+
 def roc_auc(y, s):
     order = np.argsort(s, kind="mergesort")
     ranks = np.empty(len(s)); ranks[order] = np.arange(1, len(s) + 1)
     _, inv, cnt = np.unique(s, return_inverse=True, return_counts=True)
     sums = np.zeros(len(cnt)); np.add.at(sums, inv, ranks)
     ranks = (sums / cnt)[inv]
-    n_pos = int(y.sum()); n_neg = len(y) - n_pos
-    if n_pos == 0 or n_neg == 0: return float("nan")
-    return (ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+    npos = int(y.sum()); nneg = len(y) - npos
+    if npos == 0 or nneg == 0: return float("nan")
+    return (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg)
+
 
 def prf(y, pred):
     tp = int(((pred == 1) & (y == 1)).sum()); fp = int(((pred == 1) & (y == 0)).sum())
     fn = int(((pred == 0) & (y == 1)).sum())
     prec = tp / (tp + fp) if tp + fp else 0.0
     rec = tp / (tp + fn) if tp + fn else 0.0
-    f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
-    return prec, rec, f1
+    return prec, rec, (2 * prec * rec / (prec + rec) if prec + rec else 0.0)
+
+
+# The deployed protocol scores one household, which thresholds its own probability
+# at 0.5, so that is the operating point reported first. at_depth() supports the
+# supplementary view of the same score under a ranked deployment.
+def at_depth(y, s, frac):
+    """(recruited, precision, capture, lift, n_captured) at a recruitment depth."""
+    order = np.argsort(-s)
+    n, npos = len(y), int(y.sum())
+    k = max(1, int(round(n * frac)))
+    cap = int(y[order[:k]].sum())
+    prec, base = cap / k, npos / n
+    return k, prec, (cap / npos if npos else float("nan")), prec / base, cap
+
 
 def main():
+    names, R, meta = load_derivation()
     m = load_model()
-    Xte = load_inputs(os.path.join(ROOT, "data", "test_inputs.csv"))
+    Y = load_inputs(os.path.join(ROOT, "data", "test_inputs.csv"))
     yte = load_labels(os.path.join(ROOT, "data", "test_labels.csv"))
     lo, hi, deg = m["sigmoid_lo"], m["sigmoid_hi"], m["sigmoid_degree"]
 
-    z = logit(Xte, m)
+    if Y.shape[1] != meta["series_len"]:
+        raise SystemExit(f"input width {Y.shape[1]} != derivation series_len {meta['series_len']}")
+
+    z, F = logit(Y, names, R, m)
     p_ref = sigmoid(z)
     twin_sig = cheb_sigmoid_factory(lo, hi, deg)
     p_twin = twin_sig(z)
-
     lab_ref = (p_ref > 0.5).astype(int)
     lab_twin = (p_twin > 0.5).astype(int)
 
-    # ---- fitted-model quality vs the INDEPENDENT test labels ----
-    base_rate = float(yte.mean())
-    acc = float((lab_ref == yte).mean())
-    auc = float(roc_auc(yte, p_ref))
-    prec, rec, f1 = prf(yte, lab_ref)
-    print("=== fitted-model quality vs independent test labels ===")
-    print(f"records             : {len(Xte)}")
-    print(f"base rate           : {base_rate*100:.1f}% positive (true labels)")
-    print(f"accuracy            : {acc:.3f}")
-    print(f"ROC-AUC             : {auc:.3f}")
-    print(f"precision/recall/F1 : {prec:.3f} / {rec:.3f} / {f1:.3f}")
+    print("=== Stage 5: boundary representation (derivation + model) ===")
+    print(f"baseline series     : {meta['series_len']} hourly values "
+          f"(rotate-and-sum window {meta['rotsum_window']})")
+    print(f"derived quantities  : {', '.join(m['features'])}")
 
-    # ---- Stage 3 activation-range feasibility check ----
+    print("\n=== Stage 3: task metric, confidential model vs the MEASURED labels ===")
+    base = float(yte.mean())
+    print(f"records             : {len(Y)}")
+    print(f"base rate           : {100*base:.1f}% eligible (measured reduction >= threshold)")
+    print(f"ROC-AUC             : {roc_auc(yte, p_ref):.3f}   (ranking quality, threshold-free)")
+    sel = p_ref > 0.5
+    k = int(sel.sum()); tp = int(yte[sel].sum()); npos = int(yte.sum())
+    print("--- the answer a household receives: its own score, thresholded at 0.5 ---")
+    print(f"told eligible       : {k} of {len(Y)} households ({100*k/len(Y):.1f}%)")
+    print(f"precision           : {tp/k:.3f}   told eligible and truly eligible")
+    print(f"                      {base:.3f} for a household picked at random ({(tp/k)/base:.2f}x)")
+    print(f"recall              : {tp/npos:.3f}   of truly eligible households are told so")
+    print("--- the same score at fixed selection depths (for a ranked deployment) ---")
+    print(f"{'depth':>6} {'recruited':>10} {'precision':>10} {'capture':>9} {'lift':>6}")
+    for d in (1, 2, 3, 4, 5):
+        kk, pp, cc, ll, _ = at_depth(yte, p_ref, d / 10)
+        print(f"{d*10:>5}% {kk:>10} {pp:>10.3f} {100*cc:>8.1f}% {ll:>6.2f}")
+
     print("\n=== Stage 3: activation-range feasibility check ===")
     print(f"logit (sigmoid input) test range: [{z.min():.3f}, {z.max():.3f}]  "
           f"p0.1-p99.9=[{np.percentile(z,0.1):.3f}, {np.percentile(z,99.9):.3f}]")
-    print(f"sigmoid domain [{lo:.2f}, {hi:.2f}] covers range: "
-          f"{bool(z.min() >= lo and z.max() <= hi)}  -> grade: "
-          f"{'EASY (bulk in band, no tail)' if (z.min()>=lo and z.max()<=hi) else 'needs filter/model change'}")
+    covered = bool(z.min() >= lo and z.max() <= hi)
+    print(f"sigmoid domain [{lo:.2f}, {hi:.2f}] covers range: {covered}  -> grade: "
+          f"{'EASY (bulk in band, no tail)' if covered else 'needs filter/model change'}")
 
-    # ---- Stage 7: twin vs reference (polynomial cost) ----
     prob_err = np.abs(p_twin - p_ref)
     flips = int((lab_twin != lab_ref).sum())
     print("\n=== Stage 7: twin vs reference (polynomial-approximation cost) ===")
-    print(f"records             : {len(Xte)}")
+    print(f"records             : {len(Y)}")
     print(f"max |prob twin-ref| : {prob_err.max():.3e}")
     print(f"mean|prob twin-ref| : {prob_err.mean():.3e}")
     print(f"decision agreement  : {(lab_twin==lab_ref).mean()*100:.2f}%  (flips={flips})")
 
-    # ---- application-level noise tolerance (Stage 7) ----
     margin = np.abs(p_twin - 0.5)
     print("\n=== Stage 7: application-level noise tolerance ===")
     print(f"min decision margin |prob-0.5| over test set (twin): {margin.min():.3e}")
     print(f"  -> encryption output error below this => 0 decision flips.")
     print(f"median margin: {np.median(margin):.3e}")
+    if prob_err.max() >= margin.min():
+        n_at_risk = int((margin < prob_err.max()).sum())
+        print(f"NOTE: the polynomial error ({prob_err.max():.2e}) exceeds the minimum "
+              f"decision margin ({margin.min():.2e});")
+        print(f"      {n_at_risk} of {len(Y)} households sit closer to 0.5 than that error.")
+    else:
+        print(f"the polynomial error ({prob_err.max():.2e}) is BELOW the minimum decision "
+              f"margin, so no household\n      can be flipped by the approximation.")
 
-    # ---- write ledgers used by run_test's quality + FHE-vs-twin comparison ----
     with open(os.path.join(ROOT, "data", "reference_outputs.csv"), "w") as f:
         f.write("# prob_reference,decision_reference,y_true\n")
         for p, l, yt in zip(p_ref, lab_ref, yte):
@@ -160,5 +219,27 @@ def main():
         f.write(f"{margin.min():.10e}\n")
     print("\nwrote data/reference_outputs.csv, data/twin_outputs.csv, data/noise_tolerance.txt")
 
+
+def score_one(csv_path, row):
+    """Print the twin probability for one row of an arbitrary input file, so a run
+    against a user-supplied series still has something to check the encrypted
+    result against."""
+    names, R, meta = load_derivation()
+    m = load_model()
+    Y = load_inputs(csv_path)
+    if row >= len(Y):
+        raise SystemExit(f"row {row} not in {csv_path} (it has {len(Y)} rows)")
+    if Y.shape[1] != meta["series_len"]:
+        raise SystemExit(f"{csv_path} rows have {Y.shape[1]} values, "
+                         f"expected {meta['series_len']}")
+    z, _ = logit(Y[row:row + 1], names, R, m)
+    p = cheb_sigmoid_factory(m["sigmoid_lo"], m["sigmoid_hi"], m["sigmoid_degree"])(z)[0]
+    print(f"{p:.10f},{int(p > 0.5)}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 4 and sys.argv[1] == "--score":
+        score_one(sys.argv[2], int(sys.argv[3]))
+    else:
+        main()

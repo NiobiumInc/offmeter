@@ -25,7 +25,15 @@ usage() {
 run_test.sh — demand-response eligibility pipeline
   keygen -> encrypt -> server -> decrypt, then compare the decrypted probability to the faithful twin.
 
-Usage: ./run_test.sh [--cpu | --sim | --sim-full | -h]
+Usage: ./run_test.sh [--cpu | --sim | --sim-full] [--input FILE] [-h]
+  Scores ONE household (HOUSEHOLD=<row>, default 0) and returns one result.
+
+Score your own usage instead of the bundled data:
+  --input FILE   a .csv/.txt whose rows are 672 comma-separated hourly kWh values
+                 (28 days x 24 hours). HOUSEHOLD picks the row. The faithful twin
+                 is scored for your series on the fly, so the encryption-fidelity
+                 check still runs. There is no measured label for your own data,
+                 so no truth column is shown.
   (no flag)   dispatch to the Niobium Fog (default; needs an API key). Records
               hollow (fast); the Fog reconstructs the real values on replay.
   --cpu       plain-OpenFHE local validation on your CPU
@@ -41,22 +49,28 @@ Env:
               set FOG_TARGET=FUNC_SIM for the hardware-free functional simulator)
   RINGCHK     set to --no-ring-dim-check to bypass the minimum-ring-dim security floor
               (unnecessary at N=2^16; opt in only for a deliberately small ring)
-  NREC        records to score (default: cpu=6, sim=3, fog=2)
+  HOUSEHOLD   which household (row of the input file) to score (default: 0)
+  NREC        validation-sweep size (default: 1). The protocol scores one household
+              per request; NREC>1 scores that many consecutive households to give the
+              FHE-vs-twin gate more samples, each with its own freshly generated keys.
 
 Run everything through ./run-in-container.sh. Fog access: `fog login`, or request an
 account at https://console.niobium.co/request-account.
 EOF
 }
 
-MODE="fog"; FLAG=""; SIMFULL=0
-case "${1:-}" in
-  --cpu) MODE="cpu"; FLAG="--cpu";;
-  --sim) MODE="sim"; FLAG="--sim";;
-  --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
-  "" )   MODE="fog"; FLAG="";;
-  -h|--help) usage; exit 0;;
-  *) usage; exit 2;;
-esac
+MODE="fog"; FLAG=""; SIMFULL=0; USER_INPUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cpu) MODE="cpu"; FLAG="--cpu";;
+    --sim) MODE="sim"; FLAG="--sim";;
+    --sim-full) MODE="sim"; FLAG="--sim"; SIMFULL=1;;
+    --input) shift; USER_INPUT="${1:?--input needs a file path}";;
+    -h|--help) usage; exit 0;;
+    *) usage; exit 2;;
+  esac
+  shift
+done
 
 FOG_TARGET="${FOG_TARGET:-FOG}"   # required by fog submit; FOG = real Niobium Fog (FUNC_SIM = HW-free sim)
 
@@ -69,17 +83,16 @@ case "$MODE" in
   sim) [ "$SIMFULL" = 1 ] || HOLLOW_FLAG="--hollow";;
 esac
 
-# fewer records for the trace paths: each is far heavier per record than plain CPU
-# (local fhetch_sim replay under --sim; a provisioned Fog job per household under fog).
-case "$MODE" in
-  cpu) NREC="${NREC:-6}";;
-  sim) NREC="${NREC:-3}";;
-  fog) NREC="${NREC:-2}";;
-esac
+# The protocol scores ONE household per request, so that is the default. HOUSEHOLD
+# picks which row of the input file to score. NREC>1 runs a validation sweep of
+# consecutive households, each with its OWN freshly generated key set.
+HOUSEHOLD="${HOUSEHOLD:-0}"
+NREC="${NREC:-1}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$ROOT/build"
 INPUTS="$ROOT/data/test_inputs.csv"
+OWN_DATA=0                        # 1 when scoring a user-supplied series
 TWIN="$ROOT/data/twin_outputs.csv"
 TOL_FILE="$ROOT/data/noise_tolerance.txt"
 RUN="$ROOT/run_${MODE}"; [ "$SIMFULL" = 1 ] && RUN="$ROOT/run_sim-full"
@@ -103,14 +116,55 @@ done
 # the GITIGNORED ledgers this script gates on (twin_outputs.csv, noise_tolerance.txt) —
 # regenerated, never committed — so a fresh clone must produce them once before any run.
 # Fail early with a clear pointer instead of a raw Python traceback partway through.
-for f in "$ROOT/model/model.txt" "$INPUTS" "$ROOT/data/test_labels.csv"; do
+for f in "$ROOT/model/model.txt" "$ROOT/model/derivation.txt" "$INPUTS" "$ROOT/data/test_labels.csv"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — regenerate: python3 model/make_model_and_data.py"; exit 1; }
 done
 for f in "$TWIN" "$TOL_FILE"; do
   [ -f "$f" ] || { echo "[FATAL] $f missing — generate the twin ledgers first: python3 model/twin.py"; exit 1; }
 done
 
-echo "############ demand-response run_test ($MODE, NREC=$NREC) ############"
+# ---- your own usage data (--input) ------------------------------------------
+if [ -n "$USER_INPUT" ]; then
+  [ -f "$USER_INPUT" ] || { echo "[FATAL] --input file not found: $USER_INPUT"; exit 1; }
+  INPUTS="$USER_INPUT"; OWN_DATA=1
+fi
+
+# ---- bounds + shape checks on whatever input we ended up with ---------------
+SERIES_LEN=$(awk '$1=="series_len"{print $2}' "$ROOT/model/derivation.txt")
+python3 - "$INPUTS" "$HOUSEHOLD" "$NREC" "$SERIES_LEN" <<'PY'
+import sys
+path, first, nrec, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+rows = [l.strip() for l in open(path) if l.strip() and not l.startswith('#')]
+n = len(rows)
+if first < 0 or nrec < 1:
+    sys.exit(f"[FATAL] HOUSEHOLD must be >= 0 and NREC >= 1 (got {first}, {nrec})")
+if first >= n:
+    sys.exit(f"[FATAL] HOUSEHOLD={first} is out of range: {path} has {n} rows (0..{n-1})")
+if first + nrec > n:
+    sys.exit(f"[FATAL] HOUSEHOLD={first} NREC={nrec} runs past the end: "
+             f"{path} has {n} rows, so the most you can score from here is {n-first}")
+for k in range(first, first + nrec):
+    got = len(rows[k].split(','))
+    if got != need:
+        sys.exit(f"[FATAL] row {k} of {path} has {got} values, expected {need} "
+                 f"(28 days x 24 hourly kWh readings)")
+PY
+
+# A user-supplied series has no measured label and no precomputed twin row, so
+# score its faithful twin now and compare the encrypted run against that.
+if [ "$OWN_DATA" = 1 ]; then
+  TWIN="$RUN/own_twin.csv"; mkdir -p "$RUN"; : > "$TWIN"
+  for ((k=HOUSEHOLD; k<HOUSEHOLD+NREC; k++)); do
+    python3 "$ROOT/model/twin.py" --score "$INPUTS" "$k" >> "$TWIN"
+  done
+fi
+
+if [ "$NREC" -eq 1 ]; then
+  echo "############ demand-response run_test ($MODE, household $HOUSEHOLD) ############"
+else
+  echo "############ demand-response run_test ($MODE, validation sweep: households $HOUSEHOLD..$((HOUSEHOLD+NREC-1))) ############"
+  echo "sweep shortcut: these households share one key set so the sweep stays fast"
+fi
 
 # ---- 1. keygen (client home only) -----------------------------------------
 t0=$(date +%s.%N)
@@ -119,7 +173,9 @@ t1=$(date +%s.%N)
 
 # ---- 2. provision server home (NO secret key, NO inputs) -------------------
 cp "$CLIENT/cc.bin" "$CLIENT/pk.bin" "$CLIENT/mk.bin" "$CLIENT/rk.bin" "$SERVER/"
-cp "$ROOT/model/model.txt" "$SERVER/"
+# The server gets both layers: the PUBLIC CalTRACK/TOWT derivation and the
+# utility's CONFIDENTIAL scoring weights. Neither is ever sent to the client.
+cp "$ROOT/model/model.txt" "$ROOT/model/derivation.txt" "$SERVER/"
 if [ -f "$SERVER/sk.bin" ]; then echo "[FATAL] sk leaked into server home"; exit 1; fi
 echo "provisioned server home: $(ls "$SERVER" | tr '\n' ' ')"
 echo "  asserted: secret key ABSENT from server home  ✓"
@@ -147,12 +203,15 @@ if [ "$MODE" = "fog" ]; then
 fi
 
 # ---- 4. per-household pipeline ---------------------------------------------
+echo
+echo "Encrypted scoring is compute-intensive: expect up to a couple of minutes per household."
 RESULTS="$RUN/decrypted.csv"; : > "$RESULTS"
 srv_secs=0; peak_rss_kb=0
 CTX_BYTES=0; CT_IN_BYTES=0; CT_OUT_BYTES=0
 KEY_BYTES=$(du -cb "$SERVER/cc.bin" "$SERVER/mk.bin" "$SERVER/rk.bin" "$SERVER/pk.bin" | tail -1 | cut -f1)
 
-for ((i=0; i<NREC; i++)); do
+for ((j=0; j<NREC; j++)); do
+  i=$((HOUSEHOLD + j))
   "$BUILD/dr_encrypt" "$CLIENT" "$INPUTS" "$i" "$CLIENT/ct_x_$i.bin" >/dev/null
   cp "$CLIENT/ct_x_$i.bin" "$SERVER/ct_x.bin"           # only ciphertext crosses
   CT_IN_BYTES=$(stat -c%s "$SERVER/ct_x.bin")
@@ -193,18 +252,56 @@ PY
   grep -h "ring-level\|record-pass\|hollow recording" "$RUN/server_$i.log" || true
 done
 
-# ---- 5. application quality (LEAD: real accuracy/AUC vs the TRUE labels) ----
-# The model is FITTED to an independent Bernoulli-sampled label with a documented
-# base rate, so its quality is measurable. These are the fitted model's
-# predictions vs the TRUE labels over the full labeled test set. The per-household
-# prediction is exactly the function the encrypted circuit evaluates (the faithful
-# twin); the encrypted run reproduces it to ~1e-7 — certified on the sampled
-# households by the FHE-vs-twin fidelity gate immediately below.
+# ---- 5. what each household learned, then the model's offline quality --------
+# The protocol scores ONE household per request and returns an answer only that
+# household can read. So the run leads with the per-household result, and the
+# population figures below are offline model validation on a labeled set.
 echo
-echo "=== application quality (fitted model vs true labels, labeled test set) ==="
-python3 - "$TWIN" "$ROOT/data/test_labels.csv" "$NREC" <<'PY'
+if [ "$NREC" -eq 1 ]; then echo "=== your result ==="; else echo "=== results (validation sweep) ==="; fi
+python3 - "$RESULTS" "$ROOT/data/test_labels.csv" "$HOUSEHOLD" "$NREC" "$OWN_DATA" <<'PY'
 import sys
-twin_path, lab_path, nrec = sys.argv[1], sys.argv[2], int(sys.argv[3])
+res, lab, first, nrec, own = (sys.argv[1], sys.argv[2], int(sys.argv[3]),
+                             int(sys.argv[4]), sys.argv[5] == "1")
+probs=[]
+for line in open(res):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    probs.append(float(line.split(',')[0]))
+truth=[]
+for line in ([] if own else open(lab)):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    try: truth.append(int(line.split(',')[1]))
+    except ValueError: continue
+def row(k, p):
+    ans = "ELIGIBLE" if p > 0.5 else "not eligible"
+    if own:
+        return ans, None
+    return ans, ("eligible" if truth[k] else "not eligible")
+if nrec == 1:
+    p = probs[0]; ans, t = row(first, p)
+    print(f"{'your usage' if own else 'household scored':<24}: "
+          f"{'from your own input' if own else first}")
+    print(f"eligibility probability : {p:.4f}")
+    print(f"your answer             : {ans}")
+    if t is not None:
+        print(f"measured truth for you  : {t}")
+    print("decrypted with your own secret key; the server only ever held ciphertext")
+else:
+    hdr = f"{'row':>10} {'probability':>12} {'its answer':>15}"
+    print(hdr if own else hdr + f" {'measured truth':>16}")
+    for j, p in enumerate(probs):
+        ans, t = row(first + j, p)
+        line = f"{first+j:>10} {p:>12.4f} {ans:>15}"
+        print(line if t is None else line + f" {t:>16}")
+    print("validation sweep: one key set covers these rows, so this is a test shape, "
+          "not the deployment shape")
+PY
+
+echo "=== model quality (offline validation on the labeled development set) ==="
+python3 - "$ROOT/data/twin_outputs.csv" "$ROOT/data/test_labels.csv" <<'PY'
+import sys
+twin_path, lab_path = sys.argv[1], sys.argv[2]
 probs=[]
 for line in open(twin_path):
     line=line.strip()
@@ -215,12 +312,9 @@ for line in open(lab_path):
     line=line.strip()
     if not line or line.startswith('#'): continue
     try: y.append(int(line.split(',')[1]))
-    except ValueError: continue   # skip the CSV header row
+    except ValueError: continue
 n=min(len(probs),len(y)); probs=probs[:n]; y=y[:n]
-pred=[1 if p>0.5 else 0 for p in probs]
-base=sum(y)/n
-acc=sum(1 for p,t in zip(pred,y) if p==t)/n
-# ROC-AUC via average-rank of the positive class (tie-aware Mann-Whitney).
+npos=sum(y); base=npos/n
 order=sorted(range(n), key=lambda i: probs[i])
 ranks=[0.0]*n; i=0
 while i<n:
@@ -229,38 +323,35 @@ while i<n:
     avg=(i+j)/2.0+1.0
     for k in range(i,j+1): ranks[order[k]]=avg
     i=j+1
-npos=sum(y); nneg=n-npos
+nneg=n-npos
 sumpos=sum(ranks[k] for k in range(n) if y[k]==1)
 auc=(sumpos-npos*(npos+1)/2)/(npos*nneg) if npos and nneg else float('nan')
-tp=sum(1 for p,t in zip(pred,y) if p==1 and t==1)
-fp=sum(1 for p,t in zip(pred,y) if p==1 and t==0)
-fn=sum(1 for p,t in zip(pred,y) if p==0 and t==1)
-prec=tp/(tp+fp) if tp+fp else 0.0
-rec=tp/(tp+fn) if tp+fn else 0.0
-f1=2*prec*rec/(prec+rec) if prec+rec else 0.0
-print(f"labeled test households    : {n}")
-print(f"base rate (true labels)    : {100*base:.1f}% eligible")
-print(f"accuracy                   : {acc:.3f}")
+sel=[i for i in range(n) if probs[i]>0.5]
+tp=sum(y[i] for i in sel); k=len(sel)
+prec=tp/k if k else float('nan'); rec=tp/npos if npos else float('nan')
+print(f"households in the set      : {n} (scored in the clear, labels known)")
+print(f"base rate                  : {100*base:.1f}% are eligible")
 print(f"ROC-AUC                    : {auc:.3f}")
-print(f"precision / recall / F1    : {prec:.3f} / {rec:.3f} / {f1:.3f}  (positive = eligible)")
-print(f"summary                    : base rate {100*base:.0f}% eligible; accuracy {acc:.2f}, AUC {auc:.2f}")
-print(f"(predictions the encrypted run reproduces; fidelity certified below on the "
-      f"{nrec}-household encrypted sample)")
+print(f"when it answers ELIGIBLE   : right {100*prec:.1f}% of the time "
+      f"({100*base:.1f}% at random, so {prec/base:.2f}x better)")
+print(f"of truly eligible households: {100*rec:.1f}% are told so")
 PY
 
 # ---- 6. compare against the twin (correctness PASS/FAIL gate) --------------
-python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" <<'PY'
+TWIN_OFFSET="$HOUSEHOLD"; [ "$OWN_DATA" = 1 ] && TWIN_OFFSET=0
+python3 - "$RESULTS" "$TWIN" "$TOL_FILE" "$NREC" "$TWIN_OFFSET" <<'PY'
 import sys
-res, twin, tolf, nrec = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-def probs(path, n):
+res, twin, tolf, nrec, first = (sys.argv[1], sys.argv[2], sys.argv[3],
+                                int(sys.argv[4]), int(sys.argv[5]))
+def probs(path):
     out=[]
     for line in open(path):
         line=line.strip()
         if not line or line.startswith('#'): continue
         out.append(float(line.split(',')[0]))
-        if len(out)>=n: break
     return out
-dec=probs(res, nrec); tw=probs(twin, nrec)
+dec=probs(res)[:nrec]
+tw=probs(twin)[first:first+nrec]        # the SAME households the run scored
 tol=float(open(tolf).read().strip())
 errs=[abs(d-t) for d,t in zip(dec,tw)]
 flips=sum(1 for d,t in zip(dec,tw) if (d>0.5)!=(t>0.5))

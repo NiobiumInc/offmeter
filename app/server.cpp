@@ -44,6 +44,19 @@ static void print_fog_pointer() {
       "  • No account yet? Validate locally instead:   dr_server <home> --sim\n" << std::endl;
 }
 
+// Drop the unused RNS towers from the result before it goes back to the client.
+// A ciphertext costs 2*N*8 bytes per tower (1 MiB here at N=2^16), and the towers
+// left after the circuit are unspent multiplicative budget that only decryption
+// still needs. One tower suffices because the result is sigmoid(...), always in
+// (0,1). Applied INSIDE the recorded region so the Fog computes and returns the
+// compressed ciphertext rather than the full one: 7 MiB -> 1 MiB on the wire.
+static constexpr uint32_t kResultTowers = 1;
+
+static Ciphertext<DCRTPoly> compress_result(const CryptoContext<DCRTPoly>& cc,
+                                            const Ciphertext<DCRTPoly>& ct) {
+    return cc->Compress(ct, kResultTowers);
+}
+
 int main(int argc, char* argv[]) {
     // ---- parse our own flags (leave the rest for compiler().init) ----------
     Mode mode = Mode::FOG;
@@ -100,18 +113,23 @@ int main(int argc, char* argv[]) {
         if (rk.is_open() && !cc->DeserializeEvalAutomorphismKey(rk, SerType::BINARY))
             throw std::runtime_error("load rk failed");
     }
+    // The public CalTRACK/TOWT derivation and the utility's confidential model.
+    Derivation deriv = load_derivation(home + "/derivation.txt");
     Model model = load_model(home + "/model.txt");
+    std::cout << "derivation: " << deriv.rows.size() << " public rows over "
+              << deriv.series_len << " hourly slots; confidential model over "
+              << model.features.size() << " derived quantities" << std::endl;
     Ciphertext<DCRTPoly> ct_x;
     if (!Serial::DeserializeFromFile(home + "/ct_x.bin", ct_x, SerType::BINARY))
         throw std::runtime_error("load ct_x failed");
     std::cout << "received " << fs::file_size(home + "/ct_x.bin")
               << " bytes of ciphertext (still encrypted)" << std::endl;
 
-    CircuitPlaintexts pts = build_plaintexts(cc, model);
+    CircuitPlaintexts pts = build_plaintexts(cc, model, deriv);
 
     // ---- CPU path: plain OpenFHE ------------------------------------------
     if (mode == Mode::CPU) {
-        auto prob = run_circuit(cc, model, pts, ct_x);
+        auto prob = compress_result(cc, run_circuit(cc, model, pts, ct_x));
         if (!Serial::SerializeToFile(home + "/ct_result.bin", prob, SerType::BINARY))
             throw std::runtime_error("serialize result failed");
         std::cout << "returned " << fs::file_size(home + "/ct_result.bin")
@@ -132,9 +150,8 @@ int main(int argc, char* argv[]) {
     niobium::compiler().capture_crypto_context(cc);
     niobium::compiler().tag_input("ct_x", ct_x);
     // tag every hand-built plaintext operand BEFORE start() (recorder caveat).
-    niobium::compiler().tag_input("w_hourly", pts.w_hourly);
-    niobium::compiler().tag_input("w_total_vec", pts.w_total_vec);
-    niobium::compiler().tag_input("w_peak_vec", pts.w_peak_vec);
+    for (size_t j = 0; j < pts.feat.size(); ++j)
+        niobium::compiler().tag_input(pts.names[j], pts.feat[j]);
     niobium::compiler().tag_input("bias_vec", pts.bias_vec);
     niobium::compiler().tag_input("mask_slot0", pts.mask_slot0);
     niobium::compiler().tag_keys(cc);
@@ -158,7 +175,7 @@ int main(int argc, char* argv[]) {
     if (!niobium::compiler().is_cache_valid()) {
         auto t_rec0 = std::chrono::steady_clock::now();
         niobium::compiler().start();
-        auto prob = run_circuit(cc, model, pts, ct_x);
+        auto prob = compress_result(cc, run_circuit(cc, model, pts, ct_x));
         niobium::compiler().probe("prob", prob);
         niobium::compiler().stop();
         auto t_rec1 = std::chrono::steady_clock::now();

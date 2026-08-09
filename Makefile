@@ -39,7 +39,9 @@ build:
 #   client_home/ server_home/    homes from the README's manual two-process walkthrough
 #   dr_server_workload_*/        FHETCH trace / replay directories (e.g. ..._mode_fog)
 clean:
-	rm -rf build run_cpu run_sim run_sim-full run_fog run_demo \
+	rm -rf build run_*/ \
 	       client_home server_home \
-	       dr_server_workload_* nbcc_fhetch_replay_source_*
+	       dr_server_workload_* dr_profile_* \
+	       nbcc_fhetch_replay_source_* fhetch_driver_source_* \
+	       model/__pycache__ harness/__pycache__
 	@echo "clean: removed the build tree and per-run artifacts"

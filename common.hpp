@@ -5,16 +5,30 @@
 // The circuit is factored into one run_circuit() so the --cpu path and the
 // recording (--sim / Fog) path evaluate the IDENTICAL math (Stage 8 / Stage 10).
 //
-// The two derived aggregates are computed INSIDE the encrypted circuit, from the
-// encrypted 24-hour vector:
-//   total_daily  = sum_{h=0..23} x[h]                     (rotate-and-sum, window 32)
-//   evening_peak = sum_{h=17..21} x[h]                    (mask hours 17..21, then sum)
-// and combined with the fixed logistic-regression model:
-//   logit = sum_h w_hourly[h]*x[h] + w_total*total_daily + w_peak*evening_peak + bias
-//   prob  = sigmoid(logit)                                 (OpenFHE EvalLogistic)
-// The model weight for each aggregate is folded into the masked plaintext used
-// for its rotate-and-sum, so the aggregate's derivation stays in-circuit at no
-// extra multiplicative depth.
+// TWO LAYERS, TWO TRUST LEVELS
+// ----------------------------
+//  1. PUBLIC derivation (model/derivation.txt). The CalTRACK/TOWT quantities.
+//     Every one is a linear functional of the household's encrypted consumption
+//     series with coefficients built from the CALENDAR and the WEATHER only:
+//         feature_j = row_j . y
+//     Because row_j is public, this is plaintext-vector x ciphertext followed by
+//     a rotate-and-sum -- no division, no depth beyond the single multiply.
+//
+//  2. CONFIDENTIAL model (model/model.txt). The utility's scoring layer:
+//         logit = sum_j w_j * feature_j + bias        prob = sigmoid(logit)
+//     The weights are the utility's own asset. They live only on the server and
+//     are never disclosed to the household, which is what makes evaluating the
+//     model server-side (rather than on the household's own device) necessary.
+//
+// Each w_j is folded into its plaintext row before encoding, so the derivation
+// and the scoring collapse into one multiply per feature at no extra depth --
+// exactly the trick the single-aggregate version used, now applied per feature.
+//
+// ON IRREDUCIBILITY: because every derived quantity is linear in y, the whole
+// circuit is algebraically equivalent to ONE dot product against
+// sum_j w_j*row_j. Keeping the six derivations separate is a demonstration
+// choice. The privacy claim holds either way: the utility never sees the
+// consumption series, and the household never sees the weights.
 #pragma once
 
 #include "openfhe.h"
@@ -26,18 +40,76 @@
 
 using namespace lbcrypto;
 
+// Rotate-and-sum window: the smallest power of two >= the 672-slot baseline
+// series. The client provisions rotation keys for exactly these amounts.
+inline constexpr int kRotSumWindow = 1024;
+
+inline std::vector<int32_t> rotation_indices() {
+    std::vector<int32_t> idx;
+    for (int k = 1; k < kRotSumWindow; k <<= 1) idx.push_back(k);
+    return idx;
+}
+
 // ---------------------------------------------------------------------------
-// Model (plaintext operands; known to the utility/server).
+// PUBLIC derivation: one row vector per derived quantity.
+// ---------------------------------------------------------------------------
+struct Derivation {
+    int series_len = 0;
+    int rotsum_window = 0;
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> rows;
+
+    int index_of(const std::string& n) const {
+        for (size_t i = 0; i < names.size(); ++i)
+            if (names[i] == n) return static_cast<int>(i);
+        throw std::runtime_error("derivation has no row named '" + n + "'");
+    }
+};
+
+inline Derivation load_derivation(const std::string& path) {
+    Derivation d;
+    std::ifstream f(path);
+    if (!f.is_open()) throw std::runtime_error("Cannot open derivation file: " + path);
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream ss(line);
+        std::string key;
+        ss >> key;
+        if (key == "series_len") ss >> d.series_len;
+        else if (key == "rotsum_window") ss >> d.rotsum_window;
+        else if (key == "row") {
+            std::string name; ss >> name;
+            std::vector<double> r; double v;
+            while (ss >> v) r.push_back(v);
+            d.names.push_back(name);
+            d.rows.push_back(std::move(r));
+        }
+    }
+    if (d.rows.empty()) throw std::runtime_error("derivation has no rows: " + path);
+    if (d.rotsum_window != kRotSumWindow)
+        throw std::runtime_error("derivation rotsum_window " + std::to_string(d.rotsum_window)
+                                 + " != built-in " + std::to_string(kRotSumWindow));
+    if (d.series_len > kRotSumWindow)
+        throw std::runtime_error("series_len exceeds the rotate-and-sum window");
+    for (size_t i = 0; i < d.rows.size(); ++i)
+        if (static_cast<int>(d.rows[i].size()) != d.series_len)
+            throw std::runtime_error("derivation row '" + d.names[i] + "' has "
+                                     + std::to_string(d.rows[i].size()) + " values, expected "
+                                     + std::to_string(d.series_len));
+    return d;
+}
+
+// ---------------------------------------------------------------------------
+// CONFIDENTIAL model (plaintext operand; the utility's own asset).
 // ---------------------------------------------------------------------------
 struct Model {
-    std::vector<double> w_hourly;   // 24 hourly weights
-    double w_total = 0.0;           // weight on total_daily aggregate
-    double w_peak = 0.0;            // weight on evening_peak aggregate
+    std::vector<std::string> features;   // names, matched against the derivation
+    std::vector<double> w;               // one weight per derived quantity
     double bias = 0.0;
-    double sigmoid_lo = -8.0;
-    double sigmoid_hi = 8.0;
+    double sigmoid_lo = -5.0;
+    double sigmoid_hi = 5.0;
     uint32_t sigmoid_degree = 13;
-    std::vector<int> peak_hours;    // e.g. {17,18,19,20,21}
 };
 
 inline Model load_model(const std::string& path) {
@@ -50,18 +122,15 @@ inline Model load_model(const std::string& path) {
         std::istringstream ss(line);
         std::string key;
         ss >> key;
-        if (key == "w_hourly") {
-            double v;
-            while (ss >> v) m.w_hourly.push_back(v);
-        } else if (key == "w_total") ss >> m.w_total;
-        else if (key == "w_peak") ss >> m.w_peak;
+        if (key == "features") { std::string n; while (ss >> n) m.features.push_back(n); }
+        else if (key == "w") { double v; while (ss >> v) m.w.push_back(v); }
         else if (key == "bias") ss >> m.bias;
         else if (key == "sigmoid_lo") ss >> m.sigmoid_lo;
         else if (key == "sigmoid_hi") ss >> m.sigmoid_hi;
         else if (key == "sigmoid_degree") ss >> m.sigmoid_degree;
-        else if (key == "peak_hours") { int h; while (ss >> h) m.peak_hours.push_back(h); }
     }
-    if (m.w_hourly.size() != 24) throw std::runtime_error("model w_hourly must have 24 values");
+    if (m.features.empty() || m.features.size() != m.w.size())
+        throw std::runtime_error("model features/weights mismatch in " + path);
     return m;
 }
 
@@ -70,25 +139,28 @@ inline Model load_model(const std::string& path) {
 // start(), so they can be tag_input()'d for the FHETCH recorder (Stage 10).
 // ---------------------------------------------------------------------------
 struct CircuitPlaintexts {
-    Plaintext w_hourly;    // w_hourly[h] in slots 0..23
-    Plaintext w_total_vec; // w_total in slots 0..23  -> EvalMult+sum = w_total*total_daily
-    Plaintext w_peak_vec;  // w_peak in slots 17..21  -> EvalMult+sum = w_peak*evening_peak
-    Plaintext bias_vec;    // bias in slot 0
-    Plaintext mask_slot0;  // 1 in slot 0, else 0 (isolate slot 0 before activation)
+    std::vector<std::string> names;   // for the recorder's tag_input
+    std::vector<Plaintext> feat;      // feat[j] = w[j] * derivation row for feature j
+    Plaintext bias_vec;               // bias in slot 0
+    Plaintext mask_slot0;             // 1 in slot 0, else 0
 };
 
-inline CircuitPlaintexts build_plaintexts(const CryptoContext<DCRTPoly>& cc, const Model& m) {
-    std::vector<double> wh(24, 0.0), wt(24, 0.0), wp(24, 0.0), bv(24, 0.0), ms(24, 0.0);
-    for (int h = 0; h < 24; ++h) { wh[h] = m.w_hourly[h]; wt[h] = m.w_total; }
-    for (int h : m.peak_hours) if (h >= 0 && h < 24) wp[h] = m.w_peak;
+inline CircuitPlaintexts build_plaintexts(const CryptoContext<DCRTPoly>& cc,
+                                          const Model& m,
+                                          const Derivation& d) {
+    CircuitPlaintexts p;
+    for (size_t j = 0; j < m.features.size(); ++j) {
+        const std::vector<double>& row = d.rows[d.index_of(m.features[j])];
+        std::vector<double> scaled(row.size());
+        for (size_t i = 0; i < row.size(); ++i) scaled[i] = m.w[j] * row[i];
+        p.names.push_back("feat_" + m.features[j]);
+        p.feat.push_back(cc->MakeCKKSPackedPlaintext(scaled));
+    }
+    std::vector<double> bv(d.series_len, 0.0), ms(d.series_len, 0.0);
     bv[0] = m.bias;
     ms[0] = 1.0;
-    CircuitPlaintexts p;
-    p.w_hourly    = cc->MakeCKKSPackedPlaintext(wh);
-    p.w_total_vec = cc->MakeCKKSPackedPlaintext(wt);
-    p.w_peak_vec  = cc->MakeCKKSPackedPlaintext(wp);
-    p.bias_vec    = cc->MakeCKKSPackedPlaintext(bv);
-    p.mask_slot0  = cc->MakeCKKSPackedPlaintext(ms);
+    p.bias_vec = cc->MakeCKKSPackedPlaintext(bv);
+    p.mask_slot0 = cc->MakeCKKSPackedPlaintext(ms);
     return p;
 }
 
@@ -101,23 +173,27 @@ inline Ciphertext<DCRTPoly> run_circuit(const CryptoContext<DCRTPoly>& cc,
                                         const Model& m,
                                         CircuitPlaintexts& p,
                                         const Ciphertext<DCRTPoly>& ct_x) {
-    // rotate-and-sum over a window of 32 slots: slot 0 accumulates slots 0..31.
-    // (Only slots 0..23 are populated, so slot 0 = the intended sum.)
+    // rotate-and-sum over kRotSumWindow slots: slot 0 accumulates slots 0..1023.
+    // (Only slots 0..671 are populated, so slot 0 = the intended weighted sum.)
     auto rot_sum = [&](Ciphertext<DCRTPoly> c) {
-        for (int k = 1; k < 32; k <<= 1)
+        for (int k = 1; k < kRotSumWindow; k <<= 1)
             c = cc->EvalAdd(c, cc->EvalRotate(c, k));
         return c;
     };
 
-    // sum_h w_hourly[h]*x[h]
-    auto hourly = rot_sum(cc->EvalMult(ct_x, p.w_hourly));
-    // w_total * total_daily  (total_daily = sum of all 24 hours, computed in-circuit)
-    auto total = rot_sum(cc->EvalMult(ct_x, p.w_total_vec));
-    // w_peak * evening_peak  (evening_peak = sum of hours 17..21, computed in-circuit)
-    auto peak = rot_sum(cc->EvalMult(ct_x, p.w_peak_vec));
-
-    auto logit = cc->EvalAdd(cc->EvalAdd(hourly, total), peak);
-    logit = cc->EvalAdd(logit, p.bias_vec);
+    // Each derived quantity gets its OWN ciphertext x plaintext multiply against
+    // its own public row -- that is the derivation, and it stays in-circuit.
+    // The slot-summation is shared: rotate-and-sum is linear, so
+    //     sum_j rot_sum(x * p_j) == rot_sum(sum_j x * p_j)
+    // and one shared rotate-and-sum replaces six. With a 1024-slot window that
+    // is 10 rotations per record instead of 60 -- a ~3x saving on the dominant
+    // cost, with bit-for-bit the same math and no change to the derivation.
+    Ciphertext<DCRTPoly> acc;
+    for (size_t j = 0; j < p.feat.size(); ++j) {
+        auto term = cc->EvalMult(ct_x, p.feat[j]);
+        acc = (j == 0) ? term : cc->EvalAdd(acc, term);
+    }
+    auto logit = cc->EvalAdd(rot_sum(acc), p.bias_vec);
 
     // isolate slot 0 so EvalLogistic only sees the in-domain logit.
     auto logit0 = cc->EvalMult(logit, p.mask_slot0);

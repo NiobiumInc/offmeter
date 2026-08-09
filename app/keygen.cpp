@@ -8,6 +8,7 @@
 //
 // Usage: ./dr_keygen <client_home>
 #include "openfhe.h"
+#include "../common.hpp"
 #include <filesystem>
 #include <iostream>
 
@@ -45,7 +46,11 @@ int main(int argc, char* argv[]) {
 
     auto keyPair = cc->KeyGen();
     cc->EvalMultKeyGen(keyPair.secretKey);                     // relinearization (sigmoid squarings)
-    cc->EvalRotateKeyGen(keyPair.secretKey, {1, 2, 4, 8, 16}); // rotate-and-sum (window 32)
+    // rotate-and-sum over the 1024-slot window that covers the 672-hour baseline
+    // series: powers of two 1..512. The window is a client-side constant; the
+    // client needs nothing from the utility's confidential model to generate keys.
+    auto rots = rotation_indices();
+    cc->EvalRotateKeyGen(keyPair.secretKey, rots);
 
     // crypto context + public/eval keys -> ship to server
     if (!Serial::SerializeToFile(home + "/cc.bin", cc, SerType::BINARY))
