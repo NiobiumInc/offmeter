@@ -224,7 +224,7 @@ without exactly 672 values are each rejected before any encryption starts.
 Six households take about 95 seconds. To run the whole set under encryption:
 
 ```bash
-./run-in-container.sh "NREC=400 ./run_test.sh --cpu"              # all 400, ~100 minutes
+./run-in-container.sh "NREC=400 ./run_test.sh --cpu"              # all 400, ~96 minutes
 ```
 
 Note that the model-quality figures printed after every run already cover all 400
