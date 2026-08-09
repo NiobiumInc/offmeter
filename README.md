@@ -173,7 +173,7 @@ measured truth for you  : not eligible
 decrypted with your own secret key; the server only ever held ciphertext
 ```
 
-About 25 seconds.
+About 21 seconds.
 
 #### Way 1b: score a different household
 
@@ -208,10 +208,10 @@ encrypted-vs-twin fidelity gate more than one sample:
 ./run-in-container.sh "HOUSEHOLD=100 NREC=6 ./run_test.sh --cpu"  # households 100-105
 ```
 
-Six households take about 90 seconds. To run the whole set under encryption:
+Six households take about 95 seconds. To run the whole set under encryption:
 
 ```bash
-./run-in-container.sh "NREC=400 ./run_test.sh --cpu"              # all 400, ~85 minutes
+./run-in-container.sh "NREC=400 ./run_test.sh --cpu"              # all 400, ~100 minutes
 ```
 
 Note that the model-quality figures printed after every run already cover all 400
@@ -372,7 +372,7 @@ Measured on a laptop CPU, scoring one household:
 
 |                                                       |                                                                                                          |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Time to score one encrypted household                 | **~13 seconds**                                                                                          |
+| Time to score one encrypted household | **~13 seconds** server compute; **~21 seconds** end to end including key generation |
 | Memory on the utility's side                          | **~0.9 GB**                                                                                              |
 | Data per request                                      | **13 MB** up, **1 MB** back                                                                              |
 | One-time key setup (per household)                    | **607 MB**                                                                                               |

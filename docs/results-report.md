@@ -119,7 +119,7 @@ The margin comes from matching the Chebyshev domain to the measured operand rang
 |---|---|---|
 | CKKS params | N=2^16, depth 12, scaling 50, first 55, 128-bit, FLEXIBLEAUTO | 13 RNS limbs at top level |
 | Encrypted boundary | 672 hourly kWh values (28 days) in slots 0..671 | 2.1% slot utilisation |
-| Server wall-clock | ~12–13 s / household (`--cpu`, `--sim`) | single-threaded; **measured under x86-64 emulation on arm64**, so an upper bound |
+| Server wall-clock | ~12.9 s / household (`--cpu`, `--sim`) | single-threaded; **measured under x86-64 emulation on arm64**, so an upper bound |
 | Peak server RSS | ~888 MB (`--cpu`), ~2.13 GB (`--sim` / `--sim-full`, includes local replay) | getrusage(RUSAGE_CHILDREN) |
 | Setup keys (cc+mk+rk+pk) | 607.0 MB | client→server, once per session; ten rotation keys for the 1024-slot window dominate |
 | Input ciphertext / request | 13.00 MB | client→server; matches 2·N·13·8 ≈ 13.6 MB |
