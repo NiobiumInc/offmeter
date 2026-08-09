@@ -229,24 +229,35 @@ holds 672 comma-separated hourly kWh readings (28 days x 24 hours) on one line,
 one household per line. Blank lines and `#` comments are skipped, and the
 extension is not checked, so `.csv` and `.txt` both work.
 
-`my_usage.txt`:
-
-```
-# my meter export, 28 days x 24 hourly kWh
-0.3,0.30005,0.30072,0.30667,0.33944,0.44961,0.6...
-```
+Two ready-made examples ship in `data/`, each carrying its expected result in the
+filename, so you can try this straight from a clone:
 
 ```bash
-./run-in-container.sh "./run_test.sh --cpu --input my_usage.txt"
-./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
+./run-in-container.sh "./run_test.sh --cpu --input data/input_ELIGIBLE_p0.866.txt"
+./run-in-container.sh "./run_test.sh --cpu --input data/input_NOT-ELIGIBLE_p0.044.csv"
 ```
 
 ```
 === your result ===
 your usage              : from your own input
-eligibility probability : 0.0597
-your answer             : not eligible
+eligibility probability : 0.8663
+your answer             : ELIGIBLE
 decrypted with your own secret key; the server only ever held ciphertext
+```
+
+The first is a heavy evening-peak household with strong air conditioning, the
+second is flat and daytime-heavy with none. Their commented header labels every
+column `d01h00` through `d28h23`:
+
+```
+# d01h00,d01h01,d01h02,d01h03,d01h04,d01h05,d01h06,d01h07,...
+0.47321,0.42153,0.49287,0.81620,0.45843,0.48160,1.20547,1.72411,...
+```
+
+For a file with several households, `HOUSEHOLD` picks the row:
+
+```bash
+./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
 ```
 
 The faithful twin is scored for your series on the fly, so the encryption-fidelity
