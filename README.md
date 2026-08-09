@@ -208,6 +208,19 @@ encrypted-vs-twin fidelity gate more than one sample:
 ./run-in-container.sh "HOUSEHOLD=100 NREC=6 ./run_test.sh --cpu"  # households 100-105
 ```
 
+For a file with several households, `HOUSEHOLD` picks the row:
+
+```bash
+./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
+```
+
+The faithful twin is scored for your series on the fly, so the encryption-fidelity
+check still runs. Your own data has no measured label, so no truth column appears;
+the model-quality figures still come from the bundled labeled set.
+
+`HOUSEHOLD` past the end of the file, a sweep running past the last row, or a row
+without exactly 672 values are each rejected before any encryption starts.
+
 Six households take about 95 seconds. To run the whole set under encryption:
 
 ```bash
@@ -253,19 +266,6 @@ column `d01h00` through `d28h23`:
 # d01h00,d01h01,d01h02,d01h03,d01h04,d01h05,d01h06,d01h07,...
 0.47321,0.42153,0.49287,0.81620,0.45843,0.48160,1.20547,1.72411,...
 ```
-
-For a file with several households, `HOUSEHOLD` picks the row:
-
-```bash
-./run-in-container.sh "HOUSEHOLD=2 ./run_test.sh --cpu --input my_usage.csv"   # third row
-```
-
-The faithful twin is scored for your series on the fly, so the encryption-fidelity
-check still runs. Your own data has no measured label, so no truth column appears;
-the model-quality figures still come from the bundled labeled set.
-
-`HOUSEHOLD` past the end of the file, a sweep running past the last row, or a row
-without exactly 672 values are each rejected before any encryption starts.
 
 ### Run it as a real client/server split
 
