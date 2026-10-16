@@ -506,3 +506,7 @@ provisioning dirs, the generated FHETCH trace and profile directories, and any
 `__pycache__`. The run-home glob matches **directories only** (`run_*/`), so it
 cannot delete `run_test.sh`. The committed inputs under `data/` are left untouched,
 so a later run does not need to regenerate them.
+
+## Contributing
+
+This repository is Niobium's fork of [blevergood/offmeter](https://github.com/blevergood/offmeter). Please open issues and pull requests on the original repository. Issues are turned off here, and pull requests are limited to collaborators.
